@@ -23,23 +23,24 @@ Options:
 	-T,  --Tutorial 		Prints the detailed tutorial message
 	-ac, --at_channel  		Alerts everyone in the channel 
 	-c,  --channel 			Provides a list of all channels in the team and
-					allows the user to send a message to that channel
-					(Default channel: #virtual-peptide)
+                            allows the user to send a message to that channel
+                            (Default channel: #virtual-peptide)
 	-m,  --msg 				Prompts the user for a message to send to send along
-					with the uploaded file.
+                            with the uploaded file.
 	-t,  --thread 			Declares the timestamp (in epoch time) for the message
-					you want the thread the files to
+                            you want the thread the files to
 	-d,  --delimiter 		Declares the filename delimiter (Default is a comma)
-			This is only really useful if your filename has a comma in it.
-	     --TOKEN 			Provides the input token. Not recommended -- use
+                            This is only really useful if your filename has a comma in it.
+             --TOKEN        Provides the input token. Not recommended -- use
                             '.TOKEN' text file to store tokens instead.
-         --debug            Toggles debugging. If an error message is recieved
+             --debug        Toggles debugging. If an error message is recieved
                             in the Slack API call, the full JSON error message
                             will be printed and the program will abort.
 
 """)
 
 def tutorial():
+	# This tutorial is highly specified to the specific team this script is designed for
 	sys.exit("""
  -------------------------
 | An Tutorial of slackmsg |
@@ -267,14 +268,14 @@ if __name__ == '__main__':
 		tutorial()
 
 	# Set Default variables
-	args 		= sys.argv[1:]
-	TOKEN       = None
-	channel 	= 'GQWGVEBP1'   # Set default channel here
-	delimiter 	= ','
-	msg 		= None
-	thread_ts 	= None
-	user 		= None
-	debug 		= False
+	args 	        = sys.argv[1:]
+	TOKEN           = None
+	channel         = ''   # Set default channel here
+	delimiter       = ','
+	msg             = None
+	thread_ts       = None
+	user 	        = None
+	debug           = False
 
 	for i, arg in enumerate(args):
 
