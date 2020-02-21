@@ -23,24 +23,27 @@ Options:
 	-T,  --Tutorial 		Prints the detailed tutorial message
 	-ac, --at_channel  		Alerts everyone in the channel 
 	-c,  --channel 			Provides a list of all channels in the team and
-                            allows the user to send a message to that channel
-                            (Default channel: #virtual-peptide)
+					allows the user to send a message to that channel
+					(Default channel: #virtual-peptide)
 	-m,  --msg 				Prompts the user for a message to send to send along
-                            with the uploaded file.
+					with the uploaded file.
 	-t,  --thread 			Declares the timestamp (in epoch time) for the message
-                            you want the thread the files to
+					you want the thread the files to
 	-d,  --delimiter 		Declares the filename delimiter (Default is a comma)
-                            This is only really useful if your filename has a comma in it.
-             --TOKEN        Provides the input token. Not recommended -- use
-                            '.TOKEN' text file to store tokens instead.
-             --debug        Toggles debugging. If an error message is recieved
-                            in the Slack API call, the full JSON error message
-                            will be printed and the program will abort.
+					This is only really useful if your filename has a comma in it.
+	     --
+	     
+	     
+	     Provides the input token. Not recommended -- use
+                           	        '.TOKEN' text file to store tokens instead.
+					Note: the binary file has the token built into it.
+	     --debug 	                Toggles debugging. If an error message is recieved
+        	                        in the Slack API call, the full JSON error message
+                	                will be printed and the program will abort.
 
 """)
 
 def tutorial():
-	# This tutorial is highly specified to the specific team this script is designed for
 	sys.exit("""
  -------------------------
 | An Tutorial of slackmsg |
@@ -103,6 +106,13 @@ Advanced Usage Example:
     with prod1.mdcrd and prod2.mdcrd being placed in the thread. The whole channel is notified of 
     the file being posted.
 
+Final Note:
+
+	If you have difficulties with a specific error or script, It's useful to get all of the 
+	information possible. What are you trying to do? What did you run from the command line?
+	Consider adding ` | tee failure.log` to your failed command line command to log the full
+	error. Sending this can greatly help to solve problems.
+
 """)
 		
 
@@ -110,17 +120,17 @@ class SlackFile():
 	"""
 	SlackFile is a class to handle file uploading to a slack team. 
 	"""
-	def __init__(self, TOKEN=None, token_file='.TOKEN', headers=None, filename=None, sender=None, channel=None, file_list=None, msg=None, thread_ts=None, debug=debug):
+	def __init__(self, TOKEN=None, token_file='.TOKEN', headers=None, filename=None, sender=None, channel=None, file_list=None, msg=None, thread_ts=None, debug=None, user=None):
 		# Setup
 		self.TOKEN = TOKEN if TOKEN is not None else self.get_token(token_file)
 		self.sc = SlackClient(self.TOKEN)
 		self.file_list = file_list
 		self.filename = filename
 		self.thread_ts = thread_ts
+		self.debug = debug
 		self.file_tuple = None 
 		self.comment = None
 		self.sent_ts = None
-		self.debug = debug
 		# The initial plan was for the user to input their own username as the `sender` from the 
 		# command line arguments, but this could lead to sending messages on behalf of another user.
 		# It's easier to just send it using the user's computer login name as the username. This isn't
@@ -172,7 +182,7 @@ class SlackFile():
 		
 		if idx % 2 == 0: 
 			print() # Because formatting...
-		inp = -1
+		inp = "-1"
 		while not inp.isdigit() or 0 > int(inp) > len(channel_list) - 1:
 			# This handles incorrect user input which never happens right? ;)
 			inp = input(f"\nEnter the ID for the channel you want the message to go to\n> ")
@@ -188,7 +198,7 @@ class SlackFile():
 		
 		if idx % 2 == 0: 
 			print() # Because formatting...
-		inp = ""
+		inp = "-1"
 		while not inp.isdigit() or 0 > int(inp) > len(self.resp['members']) - 1:
 			# This handles incorrect user input which never happens right? ;)
 			inp = input(f"\nEnter the ID for the User you want to send the Message to\n> ")
@@ -205,15 +215,11 @@ class SlackFile():
 	
 	def get_channels(self):
 		# Slack's API call to scan the channels of the team associated with the slack token
-		self.resp = self.sc.api_call(
-			"channels.list", 
-			headers = self.headers)
+		self.resp = self.sc.api_call("channels.list")
 
 	def get_users(self):
 		# Slack's API call to scan the users of the team associated with the slack token
-		self.resp = self.sc.api_call(
-			"users.list", 
-			headers = self.headers)
+		self.resp = self.sc.api_call("users.list")
 
 	def set_comment(self):
 		# Sets up default comment to be uplaoded with the file.
@@ -268,14 +274,14 @@ if __name__ == '__main__':
 		tutorial()
 
 	# Set Default variables
-	args 	        = sys.argv[1:]
-	TOKEN           = None
-	channel         = ''   # Set default channel here
-	delimiter       = ','
-	msg             = None
-	thread_ts       = None
-	user 	        = None
-	debug           = False
+	args 		= sys.argv[1:]
+	TOKEN       = None
+	channel 	= 'CQU9HJF2L'   # Set default channel here
+	delimiter 	= ','
+	msg 		= None
+	thread_ts 	= None
+	user 		= None
+	debug 		= False
 
 	for i, arg in enumerate(args):
 
