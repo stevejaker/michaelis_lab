@@ -1,0 +1,9 @@
+#!/bin/bash
+
+echo "Getting files from server..."
+
+sget -r -s /zhome/`whoami`/home_work/ -l /home/`whoami`/
+
+echo "Done!"
+
+sleep 3

@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+
+import os, sys
+import runtime as rt
+from glob import glob
+from getpass import getuser
+from subprocess import call, check_output
+import error_handler as EH
+import prmtop as PRMTOP
+import bashcall
+from serverTools import submit, syncDir, runJob
+from runtraj import LocationStudy
+# import runCppTraj 	# Most likely not used anymore because of the insane file sizes...
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+user = getuser() 	    # Pulls Username
+ARGS = sys.argv[1:] 	# Takes input arg vector and removes the program name
+HEADER = 'prod'
+EXTENSION = 'mdcrd'
+MULTI = False
+CONTINUE = False
+MPI = False
+OMP = False
+total_substrates = 1
+substrates = None
+catalyst_names = None
+substrate_names = None
+catalyst_res_numbers = None
+substrate_res_numbers = None
+catalyst_atom_numbers = None
+substrate_atom_numbers = None
+run_type = 'server'
+run_type_options = ['local', 'conda', 'anaconda', 'server']
+
+"""
+OLD usage() INFORMATION
+	-cr, --cresidues		Single number or dash separated list of catalyst residues (Example 1-2) -- NOT FUNCTIONAL YET
+	-sr, --sresidues 		Single number or dash separated list of substrate residues (Example 3) -- NOT FUNCTIONAL YET
+	-cn, --cname 			Declares the residue name of the catalyst. Names are CASE SENSITIVE 
+							and must match the .prmtop file EXACTLY. -- NOT FUNCTIONAL
+	-sn, --sname 			Declares the residue name of each substrate. This is to be 
+							provided as either a single string, or a comma-separated
+							list of names corresponding to the substrates as they are
+							listed in the mol2 or prmtop file. Names are CASE SENSITIVE 
+							and must match the .prmtop file EXACTLY. -- NOT FUNCTIONAL
+	Note 1: Consistency is required for molecule options. You must either only declare the atoms or the residues. 
+	A combination of atoms and residues ins not acceptable. (IE: using the -ca flag with the -sr flag will yield an error)
+	Note 2: When using the -m or --multi option, you must either use no substrate option or use the -sn/--sname option.
+"""
+
+
+def usage():
+	print(f"""
+Usage:
+	getLocation [options]
+
+General Options:
+	-h,  --help 			Shows this message
+	-R,  --restart 			Deletes all the cpptraj.in files written by this script.
+	-C,  --continue 		Indicates we will be continuing a previous cpptraj.in file (Default: {CONTINUE})
+	-m,  --multi 			Toggles a multi-substrate run. Followed by the number of 
+							different substrates in the simulation. (Default: {MULTI})
+
+File Type Options:
+	-H,  --header 			Sets file name type (Default: '{HEADER}')
+	-x,  --extension 		Sets file extension (Default: '{EXTENSION}')
+
+Molecule Options:
+	-ca, --catoms 			Dash separated list of catalyst atom numbers (Example 1-90)
+	-sa, --satoms 			Dash separated list of substrate atom numbers (Example 91-115)
+
+Cpptraj Options: 
+	-M,  --MPI 				Runs cpptraj.MPI. Include number of cores after the flag
+	-O,  --OMP 				Runs cpptraj.MPI.OMP. Include number of cores after the flag
+	-r,  --run_type 		Declares the run type. This helps to identify where
+						`cpptraj` will be found in your path. Options Include:
+							'server'    -- Runs on the server (Sources ~/.bashrc)
+							'local' 	-- Runs on your local machine 
+									  (assumes Amber was _compiled_ loacally)
+							'anaconda'  -- Sub option of 'local'. (Aka: 'conda')
+									  (assumes Amber was _installed_ via anaconda)
+Tips for Running:
+Single Substrate Contacts:
+	getLocation -ca 1-260 -sa 261-273 			-- Catalyst atoms: 1-260, Substrate atoms: 261-273. NO MPI
+	getLocation -ca 1-260 -sa 261-273 -M 16 	-- Catalyst atoms: 1-260, Substrate atoms: 261-273. MPI on 16 Cores
+
+
+Multi Substrate Contacts:
+	getLocation -m 200			-- Catalyst is residue 1, 100 molcules of substrate 1 and substrate 2. NO MPI
+	getLocation -m 200 -M 16	-- Catalyst is residue 1, 100 molcules of substrate 1 and substrate 2. MPI on 16 Cores
+
+""")
+
+def restart():
+	from glob import glob
+	for i in glob('cpptraj*.in'):
+		os.remove(i)
+
+def getSource():
+	if "/zhome/" in WORKDIR or "panfs" in WORKDIR or "/fslhome/" in WORKDIR or run_type == 'server':
+		bashcall.strCall(f"source /zhome/{user}/.bashrc")
+		return ""
+
+	elif run_type in ["conda", "anaconda"]:
+		bashcall.strCall(f"export AMBERHOME=/home/{user}/anaconda3/bin/")
+		return ""
+
+	elif run_type == "local":
+		call(f"export AMBERHOME=/home/{user}/amber18/bin")
+		return ""
+
+	else:
+		try:
+			trajdir = check_output(['which', 'cpptraj'])
+			trajdir = trajdir.decode('utf-8')
+			trajdir = trajdir.replace('cpptraj\n', '')
+			return trajdir
+		except:
+			print("ERROR: Couldn not locate cpptraj!\nRun again using the flag [ -r/--run_type ] followed by the run type.")
+			sys.exit()
+
+def findFiles():
+	global HEADER, EXTENSION
+	production_files = []
+	files = os.listdir()
+	prmtop = "complex1.prmtop"  if "complex1.prmtop" in files else "complex.prmtop"
+	for i in files:
+		if HEADER in i and i.endswith(f'.{EXTENSION}'):
+			production_files.append(i)
+	return production_files, prmtop
+
+def sortFiles(file_list):
+	global HEADER, EXTENSION
+	dct = {}
+	files = []
+	for file in file_list:
+		i = file.replace(f'.{EXTENSION}', '')
+		i = i.replace(HEADER, '')
+		if i == '':
+			i = 0
+		dct[int(i)] = {"name": file}
+	for i in range(len(dct) + 1):
+		try: files.append(dct[i]['name'])
+		except:pass
+	return files
+
+def writeTrajin(files, prmtop, catalyst_atom_list, substrate_atom_list, substrate_number=None, DONE=False):
+	global total_substrates
+	sub_id = ""
+	if MULTI:
+		each_sub = total_substrates // 2
+		if substrate_number > each_sub:
+			substrate_number -= each_sub
+			sub_id = "2"
+		else:
+			sub_id = "1"
+	# Prepare commands to analyze 
+	for atom1 in catalyst_atom_list:
+		with open(f'cpptraj_C{atom1}_S{sub_id}.in', 'a+') as f, open(f'cpptraj_C{atom1}_S{sub_id}.in', 'r') as infile:
+			infile = infile.read()
+			# Load prmtop file
+			if f"parm {prmtop}" not in infile:
+				f.write(f"parm {prmtop}\n")
+			# Load .mdcrd files
+			for file in files:
+				if f"trajin {file}" not in infile:
+					f.write(f"trajin {file}\n")
+			for atom2 in substrate_atom_list:
+				f.write(f"""distance C_{atom1}-->S{'' + sub_id + '_'+ str(substrate_number) if substrate_number is not None else ""}_{atom2} @{atom1} @{atom2} out distance_C_{atom1}_S{sub_id}_all.dat\n""")
+			if DONE:
+				f.write('run\nquit\n')
+
+
+def main():
+	if 'cpptraj.in' in os.listdir() and not CONTINUE:
+		print('Overwriting the old cpptraj.in file')
+		os.remove('cpptraj.in')
+	trajdir = getSource()
+	files, prmtop = findFiles()
+	files = sortFiles(files)
+	residue_information, res_labels, res_atom_numbers = PRMTOP.main(prmtop)
+	if MULTI:
+		# if substrates == None:
+		# 	EH.throwError("Multi Substrate Error", 2, f"Insufficient information provided for either number of total substrates or number of each substrate.\n\tTotal Substrates: {total_substrates}\n\tNumber of Each Substrate: {substrates}")
+		# while len(substrate_names) != total_substrates:
+		# 	substrate_names.append(substrates[0]) # Handles is the number of each substrate is equal
+		pieces = 2
+		if catalyst_names is None:
+			catalyst_atom_list = [x for x in range(int(residue_information[0]['starting_atom']), int(residue_information[0]['ending_atom']))]# + 1)]
+		else:
+			for i in range(1, len(catalyst_names) + 1):
+				catalyst_atom_list = [x for x in range(int(residue_information[0]['starting_atom']), int(residue_information[0]['ending_atom']))]# + 1)]
+				inp = input(catalyst_atom_list)
+		for i in range(1, total_substrates + 1): # len(substrate_names) + 1):
+			"""
+			NEED A FUNCITON HERE TO GET THE ATOM INFORMATION FOR EACH SUBSTRATE
+			"""
+			substrate_atom_list = [x for x in range(int(residue_information[i]['starting_atom']), int(residue_information[i]['ending_atom']))]# + 1)]
+			done = True if i % (total_substrates // 2) == 0 else False
+			writeTrajin(files, prmtop, catalyst_atom_list, substrate_atom_list, substrate_number=i, DONE=done)
+	else:
+		pieces = 1
+		if catalyst_res_numbers is not None and substrate_res_numbers is not None:
+			sys.exit("Not functional yet, sorry.\nPlease use atom numbers.")
+			# catalyst_atom_list, substrate_atom_list = parsePrmtop(prmtop, catalyst_res_numbers, substrate_res_numbers)
+
+		elif catalyst_atom_numbers is not None and substrate_atom_numbers is not None:
+			catalyst_atom_list = catalyst_atom_numbers
+			substrate_atom_list = substrate_atom_numbers
+
+		else:
+			EH.throwError("Atom List Error", 1, f"Insufficient information provided for which atoms/residues to analyze. Information provided:\n\tCatalyst Atoms: {catalyst_atom_numbers}\n\tSubstrate Atoms: {substrate_atom_numbers}\n\tCatalyst Residues: {catalyst_res_numbers}\n\tSubstrate Residues: {substrate_res_numbers}")
+
+		writeTrajin(files, prmtop, catalyst_atom_list, substrate_atom_list, DONE=True)
+
+	array_pieces = len(glob("cpptraj*.in")) // 2
+	traj = LocationStudy(array_pieces, mpi=mpirun, mpi_type=mpi_type, cores=cores, pieces=pieces, test=False, user=user, days='00', hrs='01', mins='00')
+	traj.write()
+
+	rt.elapsed(start, prefix="Final ")
+
+	sub = submit()
+	if sub == 'submit':
+		new_dir = syncDir()
+		runJob(new_dir, 'runtraj')
+	elif sub == 'sync':
+		new_dir = syncDir()
+		print(f'Files sent to {new_dir}')
+	# runCppTraj.main(trajdir, MPI, OMP, cores)
+
+if __name__ == '__main__':
+	start = rt.getRuntime()
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+		elif ARG in ['-R', '--restart']:
+			restart()
+			sys.exit("Done!")
+
+		elif ARG in ['-H', '--header']:
+			HEADER = ARGS[i + 1]
+
+		elif ARG in ['-x', '--EXTENSION']:
+			EXTENSION = ARGS[i + 1]
+
+		elif ARG in ['-ca', '--catoms']:
+			start, end = ARGS[i + 1].split('-')
+			start = int(start)
+			end   = int(end)
+			catalyst_atom_numbers = [x for x in range(start, end + 1)]
+			print(catalyst_atom_numbers)
+
+		elif ARG in ['-sa', '--satoms']:
+			start, end = ARGS[i + 1].split('-')
+			start = int(start)
+			end   = int(end)
+			substrate_atom_numbers = [x for x in range(start, end + 1)]
+			print(substrate_atom_numbers)
+
+		elif ARG in ['-cr', '--cresidues']:
+			if '-' in ARGS[i + 1]:
+				start, end = ARGS[i + 1].split('-')
+				catalyst_res_numbers = [x for x in range(start, end + 1)]
+			else:
+				catalyst_res_numbers = [ARGS[i + 1]]
+
+		elif ARG in ['-sr', '--sresidues']:
+			if '-' in ARGS[i + 1]:
+				start, end = ARGS[i + 1].split('-')
+				substrate_res_numbers = [x for x in range(start, end + 1)]
+			else:
+				substrate_res_numbers = [ARGS[i + 1]]
+
+		elif ARG in ['-m', '--multi']:
+			total_substrates = int(ARGS[i + 1])
+			MULTI = True
+
+		elif ARG in ['-sn', '--sname']:
+			if ',' in ARGS[i + 1]:
+				substrate_names = ARGS[i + 1].split(',')
+			else:
+				substrate_names = [ARGS[i + 1]]
+
+		elif ARG in ['-cn', '--cname']:
+			if ',' in ARGS[i + 1]:
+				catalyst_names = ARGS[i + 1].split(',')
+			else:
+				catalyst_names = [ARGS[i + 1]]
+
+		elif ARG in ['-C', '--continue']:
+			CONTINUE = True
+			print('Set to continue the existing cpptraj.in file')
+
+		elif ARG in ['-M', '--MPI']:
+			try: cores = int(ARGS[i + 1])
+			except:
+				print(f"Invalid Selection for {ARG}: {ARGS[i + 1]}")
+				print('Must be of type: Integer')
+				sys.exit()
+			if not MPI:
+				print('Set to run cpptraj.MPI')
+			MPI = True
+			OMP = False
+			mpirun = True
+			mpi_type = 'MPI'
+
+		elif ARG in ['-O', '--OMP']:
+			try: cores = int(ARGS[i + 1])
+			except:
+				print(f"Invalid Selection for {ARG}: {ARGS[i + 1]}")
+				print('Must be of type: Integer')
+				sys.exit()
+			if not MPI:
+				print('Set to run cpptraj.MPI.OMP')
+				MPI = False
+				OMP = True
+				mpirun = True
+				mpi_type = 'OMP'
+
+		elif ARG in ['-r', '--run_type']:
+			try: run_type = ARGS[i + 1].lower()
+			except:
+				print(f"Invalid Selection for {ARG}: {ARGS[i + 1]}")
+				print('Must be of type: String')
+				sys.exit()
+			if run_type not in run_type_options:
+				print()
+				print(f"Invalid Selection for {ARG}: {ARGS[i + 1]}")
+				print(f'Options include {", ".join(run_type_options)}')
+				print()
+				sys.exit()
+	main()
+

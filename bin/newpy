@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+
+import sys
+from getpass import getuser
+from subprocess import call
+
+# Add more editors as needed
+USER = getuser()
+EDITOR_LIST = ['sublime', 'sublime text', 'subl', 'atom', 'kate']
+EDIT = True
+
+# Set Default Editor
+if USER == 'jparkman':
+	# Because for some reason jacob likes to use kate lol
+	EDITOR = 'kate'
+else:
+	EDITOR = 'subl'
+
+def usage():
+	print("""
+Usage:
+	newpy <script_name>
+	newpy <-f or --file> <script_name> [optional flags]
+
+Note:
+	If called as "newpy <script_name>", no optional flags will be read
+
+Optional Flags:
+	-f,  --file 		Declares Filename
+	-e,  --editor
+""")
+
+def writeScript(filename):
+	with open(filename,'w') as f:
+		f.write(f'''#!/usr/bin/env python3
+
+import os, sys
+from shutil import copy, copytree, rmtree
+from getpass import getuser
+from subprocess import call, check_output
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+#
+# INSERT DEFAULT VARIABLES HERE
+#
+
+
+def usage():
+	print("""
+Usage:
+	{filename} [options]
+
+Options:
+	-h,  --help 			Shows this message	
+""")
+
+def main():
+	# Insert Code Here
+	pass
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+		elif ARG in ['option1', 'option2']:
+			variable = ARGS[i + 1]
+		# Insert Other Options Here
+	main()
+
+''')
+
+def filenameError():
+	print('Filename not detected!')
+	sys.exit()
+
+if __name__ == '__main__':
+	if len(sys.argv) > 2:  
+		ARGS = sys.argv[1:]
+		for i in range(len(ARGS)):
+			ARG = ARGS[i]
+			if ARG in ['-h', '--help']:
+				usage()
+				sys.exit()
+
+			elif ARG in ['-f', '--file']:
+				filename = ARGS[i + 1]
+
+			elif ARG in ['-e', '--editor']:
+				editor_choice = ARGS[i + 1]
+				if editor_choice not in EDITOR_LIST:
+					print('Invalid Editor!')
+					print('Valid Options include:')
+					print(" ,".join(EDITOR_LIST))
+					sys.exit()
+				else:
+					EDITOR = editor_choice
+	
+	else:
+		try:
+			filename = sys.argv[1]
+		except:
+			filenameError()
+
+	writeScript(filename)
+
+	if EDIT:
+		call([EDITOR, filename])

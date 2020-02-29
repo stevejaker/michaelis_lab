@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+
+import os, sys
+from shutil import copy, copytree, rmtree
+from getpass import getuser
+from subprocess import call, check_output
+import json
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+CONTINUE = False
+
+
+def usage():
+	print("""
+Usage:
+	1run [options]
+
+Options:
+	-h,  --help 			Shows this message	
+""")
+
+def writeFile(data):
+	with open('1details','a+') as outfile:
+		json.dump(data, outfile, indent=4)
+
+def getExistingFile():
+	with open('1details','r') as json_file:
+		data = json.load(json_file)
+	return data
+
+def printData():
+	data = getExistingFile()
+	for flag in data:
+		description = data[flag]['description']
+		option = data[flag]['option']
+
+
+
+def main():
+	if CONTINUE:
+		data = getExistingFile()
+	else:
+		data = {}
+	flag = None
+	desc = None
+	options = None
+	while 1:
+		option_list = []
+		flag = input("Flag Name\n> ")
+		if flag in ['exit', 'quit', 'done']:
+			writeFile(data)
+			sys.exit()
+		desc = input("Description\n> ")
+		while options != "":
+			options = input("Option (Hit Enter if Done)\n> ")
+			if options == "":
+				options = None
+				break
+			opt_description = input("Option description\n> ")
+			option_list.append({"option_name": options, "description": opt_description})
+		data[flag] = {
+				"description" : desc,
+				"option": option_list
+		}
+
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+		elif ARG in ['-c', '--continue']:
+			CONTINUE = True
+		elif ARG in ['-l', '--list']:
+			printData()
+	main()
+

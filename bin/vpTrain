@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+
+import os, sys
+from shutil import copy, copytree, rmtree
+from getpass import getuser
+from subprocess import call, check_output
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+#
+# INSERT DEFAULT VARIABLES HERE
+#
+
+
+def usage():
+	print("""
+Usage:
+	vpTrain [options]
+
+Options:
+	-h,  --help 			Shows this message	
+""")
+
+def printMenu():
+	print('''
+help 			Displays this message
+bash 			Runs the 'bash' tutorial
+filetype		Runs the 'filetype' tutorial
+flags 			Runs the 'flags' tutorial
+quit 			Exits the program
+exit 			Exits the program
+''')
+
+def bashTutorial():
+	print("Running the bash tutorial")
+	command_list = {
+		0 : {
+		'command' : 'nano',
+		'explanation': "nano is a text editor"
+		},
+		1 : {
+		'command' : 'cp',
+		'explanation': "copy is to copy"
+		},
+		2 : {
+		'command' : 'mv',
+		'explanation': ""
+		},
+		3 : {
+		'command' : 'ls',
+		'explanation': ""
+		},
+		4 : {
+		'command' : 'cd',
+		'explanation': ""
+		},
+		5 : {
+		'command' : 'rm',
+		'explanation': ""
+		},
+		6 : {
+		'command' : 'cat',
+		'explanation': ""
+		},
+		7 : {
+		'command' : 'ssh',
+		'explanation': ""
+		},
+		8 : {
+		'command' : 'scp',
+		'explanation': ""
+		}
+	}
+	for i in range(len(command_list)):
+		cmd = command_list[i]['command']
+		exp = command_list[i]['explanation']
+		print(f"{cmd}:\n{exp}\n")
+
+
+def filetypeTutorial():
+	print("Running the filetype tutorial")
+	pass
+
+def flagsTutorial():
+	print("Running the flags tutorial")
+	pass
+
+
+def main():
+	print(f'Welcome to vpTrain {USER}! Enter a Command to Start a Training.')
+	printMenu()
+	while 1:
+		ui = input(">> ")
+		inp = ui.lower().strip()
+		if inp == 'help':
+			printMenu()
+		elif inp == 'bash':
+			bashTutorial()
+		elif inp == 'filetype':
+			filetypeTutorial()
+		elif inp == 'flags':
+			flagsTutorial()
+		elif inp in ['exit', 'quit']:
+			print("Done!")
+			sys.exit()
+		else:
+			print(f'Unknown Input: {inp}')
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+		elif ARG in ['option1', 'option2']:
+			variable = ARGS[i + 1]
+		# Insert Other Options Here
+	main()
+

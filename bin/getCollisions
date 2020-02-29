@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+
+import os, sys
+from subprocess import call, check_output
+from shutil import copytree, copy
+from getpass import getuser
+import multi_sub_contacts_analysis as msub
+import collisions
+import bashcall
+import runCppTraj
+
+RUN_MULTIPLE = False
+USE_OLD = False
+MPI = False
+workdir = os.getcwd()
+user = getuser()
+group_results = f'/zhome/{user}/fsl_groups/fslg_peptide/results/results.txt'
+ARGS = sys.argv[1:]
+substrates = 100
+run_type = 'server'
+run_type_options = ['local', 'conda', 'anaconda', 'server']
+
+def MANUAL():
+	print("""
+What is getContacts?
+	getContacts is a program that interfaces with cpptraj to calculate the number of
+	contacts in a MD simulation. In order for this program to function correctly, it
+	is important to know where where this program is being run and how many of each
+	substrate is present in the simulation. 
+
+Carbon Locations:
+	A file documenting which carbon contacts to calculate is necessary.
+		The default name for this file is 'carbon_locations.txt'.
+		ALL Carbon Locations files MUST be written as follows:
+			<CATALYST_CONTACT>
+			<SUBSTRATE1_CONTACT>
+			<SUBSTRATE2_CONTACT>
+		Old Carbon Locations files correspond to the ATOM_NAME colum of a .mol2 file 
+		(column #2); however, they do not contain the element name. They are labled as
+		22, meaning C22. This program expects this to be the case in the carbon contacts
+		file and will therefore add the atom name automatically. As of now, only carbon
+		("C") contacts are allowed.
+
+		New Carbon Locations files are written the same way; however, instead of corresponding
+		to the ATOM_NAME column, they correspond to the ATOM_NUMBER column (column #1).
+
+
+	Failure to write your locations file as described above will cause script failure.
+
+Complex File:
+	A complexed mol2 file containing the catalyst and all substrates is required.
+		This file MUST be named complex.mol2.
+
+
+
+Default Values:
+	substrates = 100
+		This assumes that the simulation was run with 100 of EACH type of substrate.
+		If only one substrate is present, this script will most likely run without issue.
+		NOTE: If solvent molecules have the same atom name as the substrate contact
+		points, SUBSTRATE CONTACTS WILL BE RECORDED! 
+
+	run_type = 'server'
+""")
+
+def usage():
+	print("""
+Usage:
+	getContacts [options]
+
+Optional Flags:
+	-h,  --help 			Shows this message
+	-o,  --old 				Uses old format carbon_locations.txt file
+	-m,  --multi 			Indicates that multiple substrates are present. If not 
+							included, it's assumed there is a single substrate molecule
+	-s,  --substrates 		Declares the number of each substrate (Default 100)
+	-M,  --MPI 				Runs cpptraj.MPI. Include number of cores after the flag
+	-O,  --OMP 				Runs cpptraj.MPI.OMP. Include number of cores after the flag
+	-r,  --run_type 		Declares the run type. This helps to identify where
+							`cpptraj` will be found in your path. Options Include:
+								'server'    -- Runs on the server (Sources ~/.bashrc)
+								'local' 	-- Runs on your local machine 
+										  (assumes Amber was _compiled_ loacally)
+								'anaconda'  -- Sub option of 'local'. (Aka: 'conda')
+										  (assumes Amber was _installed_ via anaconda)
+
+	
+""")
+
+def getSource():
+	if "/zhome/" in workdir or "panfs" in workdir or "/fslhome/" in workdir or run_type == 'server':
+		bashcall.strCall(f"source /zhome/{user}/.bashrc")
+		return ""
+
+	elif run_type in ["conda", "anaconda"]:
+		bashcall.strCall(f"export AMBERHOME=/home/{user}/anaconda3/bin/")
+		return ""
+
+	elif run_type == "local":
+		call(f"export AMBERHOME=/home/{user}/amber18/bin")
+		return ""
+
+	else:
+		try:
+			trajdir = check_output(['which', 'cpptraj'])
+			trajdir = trajdir.decode('utf-8')
+			trajdir = trajdir.replace('cpptraj\n', '')
+			return trajdir
+		except:
+			print("ERROR: Couldn not locate cpptraj!\nRun again using the flag [ -r/--run_type ] followed by the run type.")
+			sys.exit()
+
+
+# OLD FUNCTION
+# def writeInputFile(files, prmtop, catalyst_atoms, substrate1_atoms, substrate2_atoms, trajdir):
+# 	for cat in catalyst_atoms:
+# 		for sub1 in substrate1_atoms:
+# 			for file in files:
+# 				with open('cpptraj.in', 'w') as f:
+# 					f.write(f"parm {prmtop}\n")
+# 					f.write(f"trajin {file}\n")
+# 					f.write(f'''distance dis @{cat} @{sub1} out distance_sub1_{cat}_{sub1}.dat\n''')
+# 				runCppTraj(trajdir)
+# 		for sub2 in substrate2_atoms:
+# 			for file in files:
+# 				with open('cpptraj.in', 'w') as f:
+# 					f.write(f"parm {prmtop}\n")
+# 					f.write(f"trajin {file}\n")
+# 					f.write(f'''distance dis @{cat} @{sub2} out distance_sub2_{cat}_{sub2}.dat"\n''')
+# 				runCppTraj(trajdir)
+
+
+def writeInputFile(files, prmtop, catalyst_atoms, substrate1_atoms, substrate2_atoms, trajdir):
+	with open('cpptraj.in', 'w') as f:
+		f.write(f"parm {prmtop}\n")
+		for file in files:
+			f.write(f"trajin {file}\n")
+		for cat in catalyst_atoms:
+			for sub1 in substrate1_atoms:
+					f.write(f'''distance dis_sub1_{cat}_{sub1} @{cat} @{sub1} out distance_sub1_{cat}_{sub1}.dat\n''')
+			for sub2 in substrate2_atoms:
+					f.write(f'''distance dis_sub2_{cat}_{sub2} @{cat} @{sub2} out distance_sub2_{cat}_{sub2}.dat"\n''')
+		f.write('\nrun\nquit')
+		
+def getProductionFiles():
+	production_files = []
+	files = os.listdir()
+	prmtop = "complex1.prmtop"  if "complex1.prmtop" in files else "complex.prmtop"
+	for i in files:
+		if 'prod' in i and i.endswith('.mdcrd'):
+			production_files.append(i)
+	return production_files, prmtop
+
+def analyze():
+	sub1_collisions = 0
+	sub2_collisions = 0
+	for i in os.listdir():
+		if i.endswith('.dat') and 'distance' in i and 'sub1' in i.lower():
+			sub1_collisions += collisions.run(i)
+		elif i.endswith('.dat') and 'distance' in i and 'sub2' in i.lower():
+			sub2_collisions += collisions.run(i)
+	with open('BATCHNUMBER.txt') as f:
+		f = f.read()
+		BATCHNUMBER = f.replace('\n', '')
+
+	with open('JOBID.txt') as f:
+		f = f.read()
+		JOBID = f.replace('\n', '')
+
+	print(f"""
+		SUB 1 Contacts: {sub1_collisions}
+		Sub 2 Contacts: {sub2_collisions}
+	""")
+
+	with open(group_results, 'a+') as f:
+		f.write(f"""{workdir} 
+      
+      b{BATCHNUMBER} j{JOBID}
+      
+      Sub1 Contacts
+      					{sub1_collisions}
+      Sub2 Contacts
+                        {sub2_collisions}
+    
+	""")
+
+def sortFiles(file_list):
+	dct = {}
+	files = []
+	# files = ""
+	for file in file_list:
+		i = file.replace('.mdcrd', '')
+		i = i.replace('prod', '')
+		if i == '':
+			i = 0
+		dct[int(i)] = {"name": file}
+		print(file)
+	for i in range(len(dct)):
+		try: files.append(dct[i]['name'])
+		except:pass
+		# files = files + dct[i]['name'] + " "
+	# return files[:len(files) - 1]
+	return files
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		arg = ARGS[i]
+		if arg in ['MANUAL', 'SHOW_MANUAL']:
+			MANUAL()
+			usage()
+			sys.exit()
+		elif arg in ['-h', '--help']:
+			usage()
+			sys.exit()
+
+		elif arg in ['-m', '--multi']:
+			RUN_MULTIPLE = True
+
+		elif arg in ['-o', '--old']:
+			USE_OLD = True
+
+		elif arg in ['-M', '--MPI']:
+			try: cores = int(ARGS[i + 1])
+			except:
+				print(f"Invalid Selection for {arg}: {ARGS[i + 1]}")
+				print('Must be of type: Integer')
+				sys.exit()
+			MPI = True
+			OMP = False
+
+		elif arg in ['-O', '--OMP']:
+			try: cores = int(ARGS[i + 1])
+			except:
+				print(f"Invalid Selection for {arg}: {ARGS[i + 1]}")
+				print('Must be of type: Integer')
+				sys.exit()
+			MPI = False
+			OMP = True
+
+		elif arg in ['-s', '--substrates']:
+			try: substrates = int(ARGS[i + 1])
+			except:
+				print(f"Invalid Selection for {arg}: {ARGS[i + 1]}")
+				print('Must be of type: Integer')
+				sys.exit()
+
+		elif arg in ['-r', '--run_type']:
+			try: run_type = ARGS[i + 1].lower()
+			except:
+				print(f"Invalid Selection for {arg}: {ARGS[i + 1]}")
+				print('Must be of type: String')
+				sys.exit()
+			if run_type not in run_type_options:
+				print()
+				print(f"Invalid Selection for {arg}: {ARGS[i + 1]}")
+				print(f'Options include {", ".join(run_type_options)}')
+				print()
+				sys.exit()
+
+
+	trajdir = getSource()
+	production_files, prmtop = getProductionFiles()
+	files = sortFiles(production_files)
+	catalyst_atoms, substrate1_atoms, substrate2_atoms = msub.run(substrates, use_old=USE_OLD, run_multiple=RUN_MULTIPLE)
+	writeInputFile(files, prmtop, catalyst_atoms, substrate1_atoms, substrate2_atoms, trajdir)
+	runCppTraj.main(trajdir, MPI, OMP, cores)
+	analyze()
+	print("\ngetCollisions has finished running.\n")

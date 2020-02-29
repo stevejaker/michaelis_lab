@@ -1,0 +1,24 @@
+Force field parameters from dcmbox.prmtop
+MASS
+cl    35.450
+c3    12.010
+h2     1.008
+
+BOND
+c3-cl    279.000   1.786
+c3-h2    326.400   1.100
+
+ANGLE
+cl-c3-cl     54.200  111.030
+h2-c3-cl     18.739  110.110
+h2-c3-h2     39.000  109.190
+
+DIHE
+
+IMPROPER
+
+NONB
+cl    1.94800000   0.26500000
+c3    1.90800000   0.10940000
+h2    1.28700000   0.01570000
+

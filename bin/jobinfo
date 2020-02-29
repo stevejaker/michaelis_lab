@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+
+import sys, re, os
+from getpass import getuser
+from subprocess import check_output as co
+from subprocess import call
+from time import sleep
+
+user = getuser()
+SLEEP_TIME = 60
+
+def usage():
+	print("""
+Usage:
+	jobinfo <jobid> [args]
+	<jobid> may be a comma separated list IF AND ONLY IF no other args ar used.
+
+Options:
+	help				Displays this message
+	path 				Only prints path to the working directory
+	follow 				Follows the standard output (slurm-<job_number>.out file)
+	mdinfo 				Prints timings for mdinfo from the working directory
+	out 				Follows mdinfo and refreshes the screen as it updates
+	""")
+
+def getDct(jobid):
+	try:
+		text = co(['scontrol','show','job',jobid])
+	except:
+		print("ERROR: Cannot find details for job {}".format(jobid))
+		sys.exit()
+	text = text.decode('utf-8').split()
+	dct = {}
+	for i in text:
+		if ',' not in i:
+			try:
+				key, value = i.split('=')
+				dct[key] = value.strip()
+			except:pass
+	return dct
+
+def showDetails(dct, follow):
+	path = correctPath(dct['WorkDir'])
+	print("\nDetails for {}".format(dct['JobName']))
+	print("{}\n".format(path))
+	print("Status:       {:<}".format(dct['JobState'] if dct['JobState'] == 'RUNNING' else "{} ({})".format(dct['JobState'],dct['Reason'] if dct['Reason'] != 'Dependency' else "{} {}".format(dct['Reason'],dct['Dependency'].title()))))
+	print("Run Time:     {:<}".format(dct['RunTime']))
+	print("Time Limit:   {:<}".format(dct['TimeLimit']))
+	print("Nodes:        {:<}".format(dct['NumNodes']))
+	print("Cores:        {:<}".format(dct['NumCPUs']))
+	print("Memory:       {:<}\n".format(dct['MinMemoryCPU']))
+	if follow == True:
+		print('Following the STDOUT')
+		call(['cat', dct['StdOut']])
+		call(['tail', '-f', dct['StdOut']])
+
+def mdinfoLoop(path, mdout):
+	try:
+		with open('{}/mdinfo'.format(path), 'r') as f:
+			f = f.readlines()
+		if f != mdout:
+			os.system('clear')
+			for i in f:
+				print(i)
+		return f
+	except:
+		print('No mdinfo file found in the requested directory')
+		print('Verify that this job is for an Amber Simulation and that the job has started.')
+		sys.exit()
+
+def getMdinfo(path):
+	try:
+		with open('{}/mdinfo'.format(path), 'r') as f:
+			f = f.readlines()
+		for i in f:
+			i = i.replace('\n', '')
+			if '|' in i or '---------' in i:
+				print(i)
+	except:
+		print('No mdinfo file found in the requested directory')
+		print('Verify that this job is for an Amber Simulation and that the job has started.')
+#if 'Estimated time remaining' in i:
+
+def correctPath(path):
+	path = re.sub(r'/panfs/.*?{}'.format(user),'',path, flags=re.DOTALL)
+	if '/panfs/' in path and 'scr' in path:
+		path = re.sub(r'/panfs/.*?grp','/fsl_groups',path, flags=re.DOTALL)
+		path_list = path.split('/')
+		# for i in path_list:
+		tmp = path_list[-1]
+		path_list[-1] = 'compute'
+		path = "/".join(path_list) + '/' + tmp
+	path = path.replace("/lustre/scratch/usr/{}".format(user), "compute/")
+	if '/zhome/' not in path:
+		return "/zhome/{}".format(user) + path
+	else:
+		return path
+
+
+if 'help' in sys.argv or len(sys.argv) == 1:
+	usage()
+	sys.exit()
+
+elif 'follow' in sys.argv:
+	dct = getDct(sys.argv[1])
+	showDetails(dct, True)
+	sys.exit()
+
+elif 'out' in sys.argv:
+	mdout = []
+	dct = getDct(sys.argv[1])
+	showDetails(dct, False)
+	path = correctPath(dct['WorkDir'])
+	while True:
+		mdout = mdinfoLoop(path, mdout)
+		sleep(SLEEP_TIME)
+	sys.exit()
+
+elif 'path' in sys.argv:
+	dct = getDct(sys.argv[1])
+	path = correctPath(dct['WorkDir'])
+	print(path)
+	sys.exit()
+
+elif 'mdinfo' in sys.argv:
+	dct = getDct(sys.argv[1])
+	showDetails(dct, False)
+	path = correctPath(dct['WorkDir'])
+	getMdinfo(path)
+	sys.exit()
+
+else:
+	if ',' in sys.argv[1]:
+		joblist = sys.argv[1].split(',')
+		for jobid in joblist:
+			dct = getDct(jobid)
+			showDetails(dct, False)
+	else:
+		dct = getDct(sys.argv[1])
+		showDetails(dct, False)
+

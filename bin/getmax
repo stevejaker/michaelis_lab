@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+import os, sys, re
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+
+
+def usage():
+	print("""
+This bad boy returns the filename of the furthest along piece of sequence of files.
+
+
+Usage:
+	getmax *.<filetype>
+	getmax *.mdcrd
+	getmax *.rst
+
+Practical Examples:
+	testdir1/ 
+		prod0.rst	prod1.rst	prod2.rst	prod3.rst	prod4.rst
+		prod5.rst	prod6.rst	prod7.rst	prod8.rst	prod9.rst
+
+	`getmax *.rst` will output prod9.rst
+
+	testdir2/ 
+		prod0.rst	prod1.rst	prod2.rst	prod3.rst	prod4.rst
+		prod5.rst	prod6.rst	prod7.rst	prod8.rst	prod900.rst
+
+	`getmax *.rst` will output prod8.rst
+
+""")
+
+
+def parse(lst):
+	"""
+	List parser to return the max value. This handles 4 typical cases:
+	Case 1:
+		There is one item in the list. (job continuation)
+	Case 2: 
+		There are multiple items in the list and the max value 
+		is incremented from the 2nd max. (job restart)
+	Case 3:
+		There are multiple items in the list and the max value
+		is not incremented from the 2nd max. 
+		(job restart of a continued job...)
+	Case 4:
+		Either there is nothing in the list or something else
+		went wrong. Sends error message.
+	"""
+	lst.sort()
+	if len(lst) == 0:
+		# Case 4
+		return -1
+	if len(lst) == 1:
+		# Case 1
+		return lst[0]
+	elif lst[-1] == lst[-2] + 1:
+		# Case 2
+		return lst[-1]
+	elif lst[-1] != lst[-2] + 1:
+		# Case 3
+		return parse(lst[:-1])
+
+def main():
+	num_list = []
+	mx = -1
+	prefix, extension = re.sub("\d+", "", ARGS[0]).split('.')
+	for i in ARGS:
+		# Prevents adding empty strings to the list
+		try: num_list.append(int(re.sub("\D", "", i)))
+		except: pass
+
+	mx = parse(num_list)
+
+	if mx != -1:
+		print(f"{prefix}{mx}.{extension}")
+	else: 
+		print(mx)
+
+
+if __name__ == '__main__':
+	if len(ARGS) == 0:
+		usage()
+		sys.exit(-1)
+	main()
+

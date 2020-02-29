@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+
+import os, sys
+from getpass import getuser
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[:1]  # Takes input arg vector and removes the program name
+
+def usage():
+	print("""
+Usage:
+	vpToc [options]
+
+Options:
+	-h,  --help 			Shows this message	
+""")
+
+def main():
+	try:
+		with open(f'/home/{USER}/zTeamVPScripts/Contents') as f:
+			f = f.readlines()
+	except:
+		print("\nCouldn't find the Contents File! Please Re-Install zTeamVPScripts.\n")
+		sys.exit()
+	print()
+	for i in f:
+		i = i.replace('\n', '')
+		if i != '' and 'Control Files' not in i and 'Executables' not in i and 'Scripts/Modules' not in i:
+			# i = i.split(' -- ')
+			# print(f"{i[0]} - {i[1]}")
+			print(i)
+		else:
+			print(i)
+	print()
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit
+	main()
+

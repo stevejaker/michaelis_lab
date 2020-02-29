@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+
+import os, sys
+from subprocess import call
+from getpass import getuser
+import bashcall
+import error_handler as EH
+
+
+ARGS = sys.argv[1:]
+# So i can use this at home, lol
+USER = 'sjaker12' if getuser() == 'Steven' else getuser()
+LOGIN = f"{USER}@ssh.rc.byu.edu"
+TEST = False
+
+WORKDIR = os.getcwd()
+local = WORKDIR + '/'
+upload = False
+server = None
+
+def usage():
+	print('''
+Usage:
+	sget -s [server_directory] [options]
+
+Purpose:
+	sget is a program to simplify the scp command process when interfacing with the BYU supercomputer.
+	It allows the user to copy a file or folder from the server to their local machine (or vice versa)
+	by using only the server path.
+
+	There are 3 important parameters that are needed for the scp command to be successful: 
+		1 - the user's login
+		2 - the file source directory
+		3 - the destination directory (where the file will be copied to). 
+
+	sget simplifies this process, setting the user's current directory as the destination directory by default.
+	Additionally, the user's username is automatically saved and the login is estimated as {username}@ssh.rc.byu.edu.
+	If you would like to copy your file to another direcotry; however, this is completely possible through the
+	use of the -l or --local flag, followed by the direcotry. Additionally, the user can upload the file to the
+	server through the use of the -U or --upload flag. No other syntax is changed.
+
+Command Explanation:
+	Due to the simplicity of this script, secure copies can be executed a lot easier. Lets take a copy command:
+		scp {username}@ssh.rc.byu.edu:/path/to/file/on/server . 
+		sget -s /path/to/file/on/server
+
+		Both commands will copy the file from the server to your current work directory, however sget does not
+		require you to type your server login. Although this appears as a minor inconvenience using scp, the
+		repeated action of typing the user's login adds up over time.
+
+	The beauty of this command, however, is seen when uploading a file (using the -U or --upload flags).
+		scp /full/path/to/local/file {username}@ssh.rc.byu.edu:/path/to/destination/on/server  
+		sget -s /path/to/destination/on/server -l file -U
+
+		Both commands copy the same item `file` from the local filesystem to the same location on the server.
+		sget is able to identify that `file` is an item in the user's current directory and is able to add the
+		full path to the filename automatically, saving a great deal of time. Additionally, if `file` happens 
+		to be a folder and not a regular file, the scp command will fail due to the lack of the '-r' flag being
+		included. The sget command, on the other hand, will not fail. When the user's input is being parsed by
+		sget, if the source file is identified as a direcotry and the -U or --upload flag is used, the full
+		command is scanned to ensure the -r flag is included.
+''')
+
+def checkLocalDir():
+	if local in os.listdir() and upload:
+		# Indicates that the user is trying to copy a file in the current directory to the server
+		
+		if os.path.isdir(local) and '-r' not in flags:
+			# Adds flag -r to flags if it detects that local is a directory.
+			flags.append('-r')
+
+		return f"{WORKDIR}/{local}"
+
+	else:
+		return local
+
+
+def setupCall(local, server, flags):
+	global LOGIN, upload
+	cmd = ['scp']
+
+	for flag in flags:
+		cmd.append(flag)
+	
+	if upload:
+		cmd.append(local)
+		cmd.append(f"{LOGIN}:{server}")
+	
+	else:
+		cmd.append(f"{LOGIN}:{server}")
+		cmd.append(local)
+	return cmd
+
+def makeCall(cmd):
+	print('\nRunning command to ' + ('upload' if upload else 'download') + ' the specified file/folder:')
+	print( " ".join(cmd) + '\n')
+	if not TEST:
+		call(cmd)
+
+
+if __name__ == '__main__':
+	# main()
+	flags = []
+	for i in range(len(ARGS)):
+		arg = ARGS[i]
+		if arg in ['-h', '--help']:
+			usage()
+			sys.exit()
+
+		elif arg in ['-s', '--server']:
+			server = ARGS[i + 1]
+
+		elif arg in ['-l', '--local']:
+			local = ARGS[i + 1]
+
+		elif arg in ['-U', '--upload']:
+			upload = True
+
+		elif arg in ['-T', '--test']:
+			TEST = True
+
+		else:
+			if arg not in [local, server]:
+				flags.append(arg)
+
+	if server is not None:
+		if upload:
+			local = checkLocalDir()
+
+		cmd = setupCall(local, server, flags)
+		makeCall(cmd)
+
+	elif not upload and '-s' not in ARGS and '--server' not in ARGS and len(ARGS) == 1:
+		EH.giveWarning('Warning', f"The -s or --server flag was not included with this run, however a command line argument was provided.\nAttempting to get the file from the server: {ARGS[0]} \nAdditionally, No location specified on the server.")
+		server = ARGS[0]
+		cmd = setupCall(local, server, flags)
+		makeCall(cmd)
+	else:
+		EH.throwError('File Not Found Error!', 1, "No file could be ")
+		sys.exit()
+

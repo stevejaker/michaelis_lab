@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+import os, sys
+from shutil import copy, copytree, rmtree
+from getpass import getuser
+from subprocess import call, check_output
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+#
+# INSERT DEFAULT VARIABLES HERE
+#
+
+
+def usage():
+	print("""
+Usage:
+	makeDatafile [options]
+
+Options:
+	-h,  --help 			Shows this message	
+""")
+
+def run(file):
+	with open(file) as f:
+		f = f.readlines()
+		del f[-1] 		# Delete the last 2
+		del f[-1]		# data points (averages)
+	with open(f"data.{file}", 'w') as F:
+		for i in f:
+			if 'NSTEP' in i and 'TIME(PS)' in i and 'TEMP(K)' in i and 'PRESS' in i:
+				i = i.split()
+				F.write(f"{i[5].strip()}\t{i[8].strip()}\n")
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit
+		# Insert Other Options Here
+	for file in os.listdir():
+		if 'neb.out.' in file:
+			run(file)
+

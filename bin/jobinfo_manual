@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+
+("""
+
+Usage:
+	jobinfo <jobid>
+	jobinfo <jobid> --follow
+	jobinfo -s <jobid> 
+	jobinfo --search <jobinfo>
+	jobinfo -h | --help
+
+Options:
+	-h --help		Shows this Screen. Not super useful is it...
+	-s			Indicates that the job is not listed and requests we search for it...
+
+""")
+
+
+from docopt import docopt
+from getpass import getuser
+from subprocess import check_output as co
+from os import chdir
+
+user = getuser()
+file = "/zhome/{}/storage/results/batch_submit_log.txt".format(user)
+#file = "/home/{}/storage/results/batch_submit_log.txt".format(user)
+
+def getPath(x):
+    with open(file,'r') as f:
+        f=f.readlines()
+        for l in f:
+            z=l.replace('\n','')
+            if z.strip() == x.strip():
+                i=0
+                while True:
+                    if f[f.index(l)-i] == '\n':
+                       return f[f.index(l)-i+1]
+                    else:
+                       i+=1
+    return "No path located. Job {} might not exist".format(x)
+
+def getDependencies(x):
+    job_dependencies = []
+    with open(file,'r') as f:
+        f=f.readlines()
+        for l in f:
+            z=l.replace('\n','')
+            if z.strip() == x.strip():
+                i=0
+                while True:
+                    job = f[f.index(l)-i]
+                    if job == '\n':
+                        return job_dependencies
+                    else:
+                        i-=1
+                        if job.replace('\n','') != x:
+                            job_dependencies.append(job.replace('\n',''))
+    return "No path located. Job {} might not exist".format(x)
+
+def searchForPath():
+    chdir('/fslhome/{}/compute/'.format(user))
+    print('Searching...')
+    path = co(['find','-iname','slurm-{}.out'.format(jobid[1:])])
+    path=path.decode('utf-8').replace('\n','').replace('./','/fslhome/{}/compute/'.format(user)).split('/')
+    del path[-1]
+    return "/".join(path)
+    
+
+if __name__ == "__main__":
+    doc = docopt(__doc__)
+    follow=doc["--follow"]
+    if doc['<jobid>'] != None:
+        jobid = 'j' + doc['<jobid>']
+        if doc['--search'] == True or doc['-s'] == True:
+            path=searchForPath()
+            print(print('\nPath for job {}\n{}/\n'.format(jobid[1:],path)))
+        else:
+            path=getPath(jobid)
+            dependencies = getDependencies(jobid)
+            print("\nPath for job {}\n{}\nDependent Jobs:\n".format(jobid[1:],path))
+            for i in dependencies:
+                if '#' not in i:
+                    print(i)
+            if follow == True:
+                print('Following the Slurm Output file for job {}'.format(jobid[1:]))
+                co(['cat',"{}/slurm-{}.out".format(path.replace('\n',''),doc['<jobid>'])])
+                co(['tail','-f',"{}/slurm-{}.out".format(path.replace('\n',''),doc['<jobid>'])])
+    #print("Taking you to job {}'s path directory".format(jobid[1:]))
+    #chdir(path.replace('\n',''))
+		

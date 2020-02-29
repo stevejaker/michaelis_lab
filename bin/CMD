@@ -1,0 +1,2069 @@
+#!/bin/bash
+
+USER=`whoami`
+IMAGE="rhel7&avx2"
+DATE=$(date +%b-%d-20%y)
+DIR=$(pwd)
+
+MOL2FILES=( $(wc -l *.mol2 | sort -g | awk '{print $2}') )
+SMALLERFILE=${MOL2FILES[0]%.mol2}
+BIGGERFILE=${MOL2FILES[1]%.mol2}
+
+function colors () {
+  BLACK="\033[0;30m"
+  DARK_GRAY="\033[1;30m"
+  RED="\033[0;31m"
+  LIGHT_RED="\033[1;31m"
+  GREEN="\033[0;32m"
+  LIGHT_GREEN="\033[1;32m"
+  BROWN_ORANGE="\033[0;33m"
+  YELLOW="\033[1;33m"
+  BLUE="\033[0;34m"
+  LIGHT_BLUE="\033[1;34m"
+  PURPLE="\033[0;35m"
+  LIGHT_PURPLE="\033[1;35m"
+  CYAN="\033[0;36m"
+  LIGHT_CYAN="\033[1;36m"
+  LIGHT_GRAY="\033[0;37m"
+  WHITE="\033[1;37m"
+  BOLD="\033[1;65m"
+  RESET="\033[0m"
+}         #Grabs all of the colors for notifications
+
+function getNumSubs () {
+  echo -e "
+${BOLD}HOW MANY DIFFERENTY TYPES OF SUBSTRATE ARE YOU USING?${RESET}
+" 
+read -p "[No Default] >> " NUM_SUB_TYPES
+  echo -e "
+${BOLD}HOW MANY MOLECULES OF EACH SUBSTRATE ARE YOU USING?${RESET}
+" 
+read -p "[No Default] >> " SUB_SPLIT
+SUBS=`python -c "print($SUB_SPLIT*$NUM_SUB_TYPES)"` 
+}
+
+function sbatchSubmitPartOne () {
+  cat<<EOF> sbatch_submit.sh
+#!/bin/bash
+
+DIR=\$(pwd)
+
+FILE=\$"JOBID.txt"
+
+if [ -f "\$FILE" ];
+then
+    OLDID=\$(cat JOBID.txt)
+    NEWBATCH=\$(sed "/\${OLDID}/ d" /zhome/${USER}/fsl_groups/fslg_peptide/results/batch_log.txt)
+    echo "\$NEWBATCH" > /zhome/${USER}/fsl_groups/fslg_peptide/results/batch_log.txt
+else
+    echo "JOBID is Not there"
+fi
+
+jid0=\$(sbatch --parsable sander0.sh \$@)
+echo \$jid0
+jid0A=\$(sbatch -d afterok:\$jid0 analyze.sh 0 $SUBS $SUB_SPLIT | cut -f 4 -d' ')
+echo \$jid0A
+EOF
+}
+
+function sbatchSubmitMiddlePart () {
+  cat<<EOF>> sbatch_submit.sh
+jid${NUM}=\$(sbatch -d afterok:\$jid${OLD}  sander${NUM}.sh | cut -f 4 -d' ')
+echo \$jid${NUM}
+jid${NUM}A=\$(sbatch -d afterok:\$jid${NUM}  analyze.sh ${NUM} ${SUBS} ${SUB_SPLIT} | cut -f 4 -d' ')
+echo \$jid${NUM}A
+EOF
+}
+
+function sander_singleSubstrate () {
+  TOTAL_CORES=$(($NODES * $CORES))
+  tee<<EOF>sander0.sh
+#!/bin/bash
+
+#SBATCH -C '$IMAGE'
+#SBATCH --time=$DAYS-$HRS:$MINS         # time (DD-HH:MM)
+#SBATCH --nodes=$NODES --ntasks-per-node=$CORES  # number of cores per node
+#SBATCH --mem-per-cpu=${MEM}${MEM_TYPE}   # memory per CPU core
+#SBATCH --mail-user=${USER}@byu.edu   # email address
+#SBATCH --mail-type=FAIL
+#SBATCH --requeue
+$TEST
+
+# Set the max number of threads to use for programs using OpenMP. Should be <= ppn. Does nothing if the program doesn't use OpenMP.
+OMP_NUM_THREADS=\$SLURM_CPUS_ON_NODE
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+type module &>/dev/null
+[[ \$? -eq 0 ]] || . /etc/profile  
+
+module purge
+module load gcc openmpi python amber/18
+
+FILENAME=\$1; shift
+FORMAT=\$1; shift
+SOLVENTBOX=\$1; shift
+PARAMSOLVENT=\$1; shift
+SUB=\$1; shift
+
+
+rm leap_topsol.in
+
+parmchk2 -i \$FILENAME.\$FORMAT -f \$FORMAT -o \$FILENAME.frcmod
+parmchk2 -i \$SUB.\$FORMAT -f \$FORMAT -o \$SUB.frcmod
+
+
+echo "source leaprc.protein.ff14SB
+source leaprc.gaff2
+addPath /zhome/${USER}/storage/modified_solutions
+loadoff solvents.lib
+loadamberparams \$FILENAME.frcmod
+loadamberparams \$PARAMSOLVENT
+loadamberparams \$SUB.frcmod
+loadoff \$SOLVENTBOX.off
+peptide = load\$FORMAT \$FILENAME.\$FORMAT
+sub = load\$FORMAT \$SUB.\$FORMAT
+complex = combine {peptide sub}
+savemol2 complex complex.mol2 0
+solvateBox complex \$SOLVENTBOX 10 0.8
+saveamberparm complex complex.prmtop complex.inpcrd
+savemol2 complex complex1.mol2 1
+savemol2 complex complex2.mol2 0
+quit" >> leap_topsol.in
+
+tleap -f leap_topsol.in
+
+echo ""
+echo "System is solvated and ready for MD run."
+echo ""
+
+
+
+echo ""
+echo "Minimizing the system..."
+echo ""
+
+
+mpirun -np $TOTAL_CORES pmemd.MPI -O -i min.in -o min.out -p complex.prmtop -c complex.inpcrd -r min.rst
+
+echo ""
+echo "Heating the system..."
+echo ""
+
+
+mpirun -np $TOTAL_CORES pmemd.MPI -O -i heat.in -o heat.out -p complex.prmtop -c complex.inpcrd -c min.rst -r heat.rst -x heat.mdcrd
+
+echo ""
+echo "Compressing system"
+echo ""
+
+mpirun -np $TOTAL_CORES pmemd.MPI -O -i press.in -o press.out -p complex.prmtop -c heat.rst -r press.rst -x press.mdcrd
+
+echo ""
+echo "MD production is running..."
+echo ""
+
+mpirun -np $TOTAL_CORES pmemd.MPI -O -i prod.in -o prod0.out -p complex.prmtop -c press.rst -r prod0.rst -x prod0.mdcrd
+EOF
+}         #Writes the sander0.sh script
+
+### PUT THE LAST MEMORY HERE
+
+
+
+
+
+
+function setup_singleSubstrate () {
+cat <<EOF | sed 's/EOFPLACEHOLDER/EOF/g' > setup.sh
+#!/bin/bash
+
+MOL2FILES=( \$(wc -l *.mol2 | sort -g | awk '{print \$2}') )
+SMALLERFILE=\${MOL2FILES[0]%.mol2}
+BIGGERFILE=\${MOL2FILES[1]%.mol2}
+
+echo "\$SMALLERFILE"
+echo "\$BIGGERFILE"
+
+NUMBER=\$RANDOM
+DONE=
+while [[ -z \$DONE ]]; do
+    if [[ ! -z \$(grep -i -n -r \$NUBMER \$(ls /home/${USER}/storage/amber/submd)) ]]; then
+        NUMBER=\$RANDOM;
+    else
+        DONE=1
+    fi
+done
+
+
+FSLDIR=\$(pwd)
+echo "\$FSLDIR"
+
+
+echo "\$FSLDIR" | tee filefolder.txt > /dev/null
+echo "\$FSLDIR" | tee filefolder1.txt > /dev/null
+
+sed -i 's/home/zhome/g' filefolder.txt
+sed -i 's/storage/compute/g' filefolder.txt
+
+FSLDIRNEW1=\$(cat filefolder.txt)
+
+sed -i 's/home/zhome/g' filefolder1.txt
+sed -i 's/storage/compute/g' filefolder1.txt
+sed -i '\$s/\w*\$//' filefolder1.txt
+
+FSLDIRNEW=\$(cat filefolder1.txt)
+
+echo "#!/bin/bash
+
+FILENAME=\\$1; shift
+SUB=\\$1; shift
+
+cd \$FSLDIRNEW1
+
+bash sbatch_submit.sh \\$FILENAME mol2 $SOLVENTBOX $SOLVENTFRCMOD \\$SUB
+" | tee \${NUMBER}runamber_sub.sh > /dev/null
+
+mv \${NUMBER}runamber_sub.sh /home/${USER}/storage/amber/submd
+
+echo "Sent files to /zhome/${USER}/storage/amber/"
+
+rsync --update -raz --progress /home/${USER}/storage/amber/submd ${USER}@rhel7ssh.fsl.byu.edu:/zhome/${USER}/storage/amber/
+
+echo "Sent files to \$FSLDIRNEW"
+
+ssh ${USER}@rhel7ssh.fsl.byu.edu mkdir -p \$FSLDIRNEW1
+
+rsync --update -raz --progress \$FSLDIR ${USER}@rhel7ssh.fsl.byu.edu:\$FSLDIRNEW
+
+ssh ${USER}@rhel7ssh.fsl.byu.edu "rm -rf \$FSLDIRNEW1/filefolder.txt \$FSLDIRNEW1/filefolder1.txt \$FSLDIRNEW1/setup.sh \$FSLDIRNEW1/contacts.tcl \$FSLDIRNEW1/vmd_script.sh"
+
+ssh ${USER}@rhel7ssh.fsl.byu.edu /bin/bash << EOF
+cd /zhome/${USER}/storage/amber/submd/
+bash \${NUMBER}runamber_sub.sh \$BIGGERFILE \$SMALLERFILE
+EOFPLACEHOLDER
+
+rm filefolder.txt
+rm filefolder1.txt
+rm /home/${USER}/storage/amber/submd/\${NUMBER}runamber_sub.sh
+echo "done"
+EOF
+
+}
+
+function middle_sander () {
+  TOTAL_CORES=$(($NODES * $CORES))
+  tee<<EOF>sander${NUM}.sh
+#!/bin/bash
+
+#SBATCH -C '$IMAGE'
+#SBATCH --time=$DAYS-$HRS:$MINS         # time (DD-HH:MM)
+#SBATCH --nodes=$NODES --ntasks-per-node=$CORES  # number of cores per node
+#SBATCH --mem-per-cpu=${MEM}${MEM_TYPE}   # memory per CPU core
+#SBATCH --mail-user=${USER}@byu.edu   # email address
+#SBATCH --mail-type=FAIL
+#SBATCH --requeue
+
+# Set the max number of threads to use for programs using OpenMP. Should be <= ppn. Does nothing if the program doesn't use OpenMP.
+export OMP_NUM_THREADS=\$SLURM_CPUS_ON_NODE
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+type module &>/dev/null
+[[ \$? -eq 0 ]] || . /etc/profile  
+
+module purge
+module load gcc openmpi python amber/18
+
+mpirun -np $TOTAL_CORES pmemd.MPI -O -i prod.in -o prod${NUM}.out -p complex.prmtop -c prod${OLD}.rst -r prod${NUM}.rst -x prod${NUM}.mdcrd
+EOF
+}         #Writes all other sander.sh scripts NOT INCLUDING THE FINAL ONE
+
+
+
+
+###############################################################################
+#                            THIS IS NOT FINISHED YET
+###############################################################################
+function analysisScript () {
+case $ANALYSIS_SCRIPT in
+  "one_diene.sh" | "multiple_diene.sh" )
+cat <<'EOF'| sed 's/EOFPLACEHOLDER/EOF/g' > analyze.sh  
+#!/bin/bash
+
+#SBATCH -C 'rhel7'
+#SBATCH --time=00-03:30         # time (DD-HH:MM)
+#SBATCH --nodes=1 --ntasks-per-node=1
+#SBATCH --mem-per-cpu=2G   # memory per CPU core
+#SBATCH --mail-user=sjaker12@byu.edu   # email address
+#SBATCH --mail-type=FAIL
+#SBATCH --requeue
+
+#  _____ _____ ______ _   _ ______  _____ 
+# |  __ \_   _|  ____| \ | |  ____|/ ____|
+# | |  | || | | |__  |  \| | |__  | (___  
+# | |  | || | |  __| | . ` |  __|  \___ \ 
+# | |__| || |_| |____| |\  | |____ ____) |
+# |_____/_____|______|_| \_|______|_____/ 
+#
+
+NUM=$1    # PULL THIS VARIABLE FROM THE sbatch_submit script
+SUBS=`python -c "print($2+1)"`
+SUB_SPLIT=`python -c "print($3+1)"`
+
+
+# Set the max number of threads to use for programs using OpenMP. Should be <= ppn. Does nothing if the program doesn't use OpenMP.
+export OMP_NUM_THREADS=$SLURM_CPUS_ON_NODE
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+type module &>/dev/null
+[[ $? -eq 0 ]] || . /etc/profile  # source /etc/profile if `module` isn't defined
+
+module purge
+module load python
+
+source /zhome/sjaker12/.bashrc
+
+echo ""
+echo "Analyzing reaction.."
+echo ""
+PWD=$(pwd)
+
+
+echo "
+mol new complex.prmtop
+mol addfile prod${NUM}.mdcrd type netcdf waitfor all
+#set dir /apps/vmd/1.9.3/gcc-7_openmpi-3.1_hdf5-1.10_netcdf-4.6/lib/plugins/noarch/tcl
+set dir /zhome/sjaker12/vmd/lib/vmd/plugins/noarch/tcl/pbctools2.8/
+source $dir/pkgIndex.tcl
+package require pbctools
+pbc box
+pbc wrap -all
+source superTickle.tcl
+" >> vmd_text
+
+eval $(awk '{print "var"NR"="$1}' carbon_locations.txt)
+
+for (( i = 2; i <= $SUBS; i++ )); do
+
+pep1=`python -c "print('\"resid 1 and name C${var1}\"')"`
+pep2=`python -c "print('\"resid 1 and name C${var2}\"')"`
+sub1=`python -c "print('\"resid ${i} and name C${var3}\"')"`
+sub2=`python -c "print('\"resid ${i} and name C${var4}\"')"`
+
+if [[ i -le $SUB_SPLIT ]]; then
+  counter=`python -c "print('sub1_{}'.format($i-1 if len(str($i-1))>1 else '0'+str($i-1)))"`
+else
+  counter=`python -c "print('sub2_{}'.format($i-51 if len(str($i-51))>1 else '0'+str($i-51)))"`
+fi
+cat << EOF >> vmd_text
+superTickle1 ${sub1} ${sub2} 3.40 ${counter}
+superTickle2 ${pep1} ${pep2} ${sub1} ${sub2} 3.8 ${counter}
+EOFPLACEHOLDER
+cat << EOF >> folder_list
+${counter}
+EOFPLACEHOLDER
+done
+
+vmd -dispdev text -e vmd_text
+
+folders=`cat folder_list`
+
+for i in $folders; do
+sub_num=${i: -2}
+sub_name=${i::4}
+#echo "Sub Name: ${sub_name}     Sub Number: ${sub_num}     I: ${i}"
+case $sub_name in
+  sub1 )
+    value=`cat ./contacts_${i}/contacts.txt`
+    value=`python -c "
+temp = str('${value}').split(':')
+print(int(temp[-1]))
+"`
+    sub1_contacts=`python -c "print($sub1_contacts+$value)"`
+    ;;
+  sub2 )
+    value=`cat ./contacts_${i}/contacts.txt`
+    value=`python -c "
+temp = str('${value}').split(':')
+print(int(temp[-1]))
+"`
+    sub2_contacts=`python -c "print($sub2_contacts+$value)"`
+    ;;
+  * )
+    true
+    ;;
+esac
+done  
+
+
+# THIS ONLY PERTIANS TO THE LAST ANALYSIS SCRIPT
+#BATCHNUMBER=$(cat BATCHNUMBER.txt)
+#JOBID=$(cat JOBID.txt)
+#
+#echo "$PWD
+#
+#      b${BATCHNUMBER} j$JOBID
+#
+#      Binding Substrate Contacts
+#                        $sub1_contacts
+#
+#      Non-binding Substrate Contacts
+#                        $sub2_contacts
+#
+#" >> /zhome/sjaker12/fsl_groups/fslg_peptide/results/location_results.txt
+#
+
+CONTACT_DIR="contacts_all_${NUM}"
+mkdir ${CONTACT_DIR}
+mv contacts_s* ./${CONTACT_DIR}
+mv folder_list ./${CONTACT_DIR}
+rm vmd_text
+EOF
+    ;;
+  "one_indole.sh" )
+cat<<EOF> analyze.sh
+something
+EOF
+    ;;
+  "multiple_indoles.sh" )
+cat<<EOF> analyze.sh
+something
+EOF
+    ;;
+esac
+
+}
+
+
+function sbatchSubmitFinal () {
+  OLD=`python -c "print($OLD+1)"`
+      cat<<EOF>> sbatch_submit.sh
+jid${NUM}=\$(sbatch -d afterok:\$jid${OLD}  analyze.sh ${NUM} ${SUBS} ${SUB_SPLIT} | cut -f 4 -d' ')
+echo \$jid${NUM}
+jid${NUM}A=\$(sbatch -d afterok:\$jid${NEW}  analyze.sh ${NUM} ${SUBS} ${SUB_SPLIT} | cut -f 4 -d' ')
+echo \$jid${NUM}A
+
+echo "\$jid${NUM}" > JOBID.txt
+BATCHNUMBER=\$(cat BATCHNUMBER.txt)
+
+echo "b\${BATCHNUMBER} j\${jid${NUM}}" >> /zhome/${USER}/fsl_groups/fslg_peptide/results/batch_log.txt
+
+echo "\$DIR
+b\${BATCHNUMBER}
+j\${jid0}
+j\${jid1}
+j\${jid2}
+j\${jid3}
+j\${jid4}
+j\${jid5}
+j\${jid6}
+j\${jid7}
+j\${jid8}
+j\${jid9}
+j\${jid10}
+j\${jid11}
+j\${jid12}
+j\${jid13}
+j\${jid14}
+j\${jid15}
+j\${jid16}
+j\${jid0}A
+j\${jid1}A
+j\${jid2}A
+j\${jid3}A
+j\${jid4}A
+j\${jid5}A
+j\${jid6}A
+j\${jid7}A
+j\${jid8}A
+j\${jid9}A
+j\${jid10}A
+j\${jid11}A
+j\${jid12}A
+j\${jid13}A
+j\${jid14}A
+j\${jid15}A
+j\${jid16}A
+" >> /zhome/${USER}/storage/results/batch_submit_log.txt
+
+echo "
+scancel \${jid0}
+scancel \${jid1}
+scancel \${jid2}
+scancel \${jid3}
+scancel \${jid4}
+scancel \${jid5}
+scancel \${jid6}
+scancel \${jid7}
+scancel \${jid8}
+scancel \${jid9}
+scancel \${jid10}
+scancel \${jid11}
+scancel \${jid12}
+scancel \${jid13}
+scancel \${jid14}
+scancel \${jid15}
+scancel \${jid16}
+scancel \${jid0}A
+scancel \${jid1}A
+scancel \${jid2}A
+scancel \${jid3}A
+scancel \${jid4}A
+scancel \${jid5}A
+scancel \${jid6}A
+scancel \${jid7}A
+scancel \${jid8}A
+scancel \${jid9}A
+scancel \${jid10}A
+scancel \${jid11}A
+scancel \${jid12}A
+scancel \${jid13}A
+scancel \${jid14}A
+scancel \${jid15}A
+scancel \${jid16}A
+" > /zhome/${USER}/storage/OH_CRAP_I_MESSED_UP_${BATCHNUMBER}
+EOF
+}
+
+
+function tickleScript () {
+  tee<<'EOF'> superTickle.tcl
+# Trajectory analysis for a 4 contact point evaluation 
+# optional parameters: start and endframe in the trajectory
+# frames are numbered starting at 0
+#
+# input usage: 
+# contact "sel1" "sel2" "sel3" "sel4" cutoff startframe endframe
+#
+# input example 1:
+# contact "protein point A" "protein point B" "ligand point C" "ligand point D" 3.0 0 999
+#
+# input example 2:
+# contact "resid 2 and name C4" "resid 2 and name C2" "resid 1 and  name C84" "resid 1 and name C85" 3.8
+
+# In input example 1 This will find all contact points in a set within 3A of protein to the ligand, points A and B distance will not be measured, nor C and D distances. Only from A to C, A to D, B to C, and B to D. input order matters on what distance is measured. Sel1 Sel2 will be a nonmeasurable pair and Sel3 and Sel4 will be nonmeasurable pair. It only measures between Sel1 to Sel 3, Sel1 to Sel4, Sel2 to Sel3, Sel2 to Sel 4. Cutoff distance is measure in angstroms must be between 2.0 to 4.0.
+
+# This will also make a directory folder for all output files named "contacts"
+
+puts "*************************************************************************************************"
+puts "* Input usage:                                                                                  *" 
+puts "* contact <sel1> <sel2> <sel3> <sel4> <cutoff> <startframe> <endframe>                          *"
+puts "*                                                                                               *"
+puts "* Input example 1:                                                                              *"
+puts "* contact <protein point A> <protein point B> <ligand point C> <ligand point D> <3.0> <0> <999> *"
+puts "*                                                                                               *"
+puts "* Script measures distance between Sel1 to Sel 3, Sel1 to Sel4, Sel2 to Sel3, Sel2 to Sel 4.    *"
+puts "* Cutoff distance is measured in angstroms, cutoff must be between values 2.0 to 4.0.           *" 
+puts "* If startframe and endframe is left off it will calculated total frames.                       *"
+puts "* Frames are numbered starting at 0                                                             *"
+puts "* Files will be saved the self-made folder named contacts                                       *"
+puts "*                                                                                               *"
+puts "*************************************************************************************************"
+
+
+proc superTickle2 { sel1 sel2 sel3 sel4 cutoff counter args} {
+
+#makes a directory named contacts and puts all output files in that folder
+
+cd contacts_$counter
+
+  if {$cutoff > 4.0} {
+    puts "cutoff is too large, please re-enter input and use a cutoff value lower than 4.0 A"
+    cd ..
+    return 
+   }
+   
+  if {$cutoff <2.0} {
+    puts "cutoff is too small, please re-enter input and use a cutoff value higher than 2.0 A"
+    cd ..
+    return
+   }
+   
+  
+  # get index of the last frame
+  set numframes [expr {[molinfo top get numframes] - 1}]
+  puts "total number of frames: $numframes"
+  if {[llength $args] == 0} {
+    set startframe 0
+    set endframe $numframes
+  }
+  if {[llength $args] == 1} {
+    set startframe [lindex $args 0]
+    set endframe $numframes
+    if {$startframe < 0} {
+      puts "illegal value of startframe, changing to 0"
+      set startframe 0
+    }
+  }
+  if {[llength $args] > 1} {
+    set startframe [lindex $args 0]
+    set endframe [lindex $args 1]
+    if {$startframe < 0} {
+      puts "illegal value of startframe, changing to 0"
+      set startframe 0
+    }
+    if {$endframe > $numframes} {
+      puts "illegal value of endframe, changing to $numframes"
+      set startframe 0
+    }
+  }
+  set totframes [expr $endframe - $startframe + 1]
+  puts "analysis will be performed on $totframes frame(s) ($startframe to $endframe)"
+
+  # make some mappings
+  set all [atomselect top all]
+  # resid map for every atom
+  set allResid [$all get residue]
+  # resname map for every atom
+  set allResname [$all get resname]
+  # create resid->resname map
+  foreach resID $allResid resNAME $allResname {
+    set mapResidResname($resID) $resNAME
+  }
+
+  # create specified atom selections
+  set A1 [atomselect top $sel1]
+  set B1 [atomselect top $sel2]
+  set C1 [atomselect top $sel3]
+  set D1 [atomselect top $sel4]
+  set A2 [atomselect top $sel1]
+  set B2 [atomselect top $sel2]
+  set C2 [atomselect top $sel3]
+  set D2 [atomselect top $sel4]
+
+  # output file for printing out all contacts
+  set fileAllA1C1 "contacts&Distance_A1C1.dat"
+  set fileAllA2D2 "contacts&Distance_A2D1.dat"
+  set fileAllB1C2 "contacts&Distance_B1C2.dat"
+  set fileAllB2D2 "contacts&Distance_B2D2.dat"
+  set fallA1C1 [open $fileAllA1C1 w]
+  set fallA2D1 [open $fileAllA2D2 w]
+  set fallB1C2 [open $fileAllB1C2 w]
+  set fallB2D2 [open $fileAllB2D2 w]
+  
+  # cycle over the trajectory
+  for {set i $startframe; set d 1} {$i <= $endframe} {incr i; incr d} {
+    # show activity
+    if { [expr $d % 10] == 0 } {
+      puts -nonewline ">"
+      if { [expr $d % 500] == 0 } { puts " " }
+      flush stdout
+    }
+    
+    # update selections
+    # we expect that atom assignments didn't change
+    $all frame $i
+    $all update
+    $A1 frame $i
+    $A1 update
+    $B1 frame $i
+    $B1 update
+    $C1 frame $i
+    $C1 update
+    $D1 frame $i
+    $D1 update
+    $A2 frame $i
+    $A2 update
+    $B2 frame $i
+    $B2 update
+    $C2 frame $i
+    $C2 update
+    $D2 frame $i
+    $D2 update
+    # position for every atom
+    set allPos [$all get {x y z}]
+    
+    # extract the pairs. listA and listB hold corresponding pairs from selections 1 and 2, respectively.
+    foreach {listA1 listC1} [measure contacts $cutoff $A1 $C1] break
+
+    # extract the pairs. listA and listB hold corresponding pairs from selections 1 and 2, respectively.
+    foreach {listA2 listD1} [measure contacts $cutoff $A2 $D1] break
+    
+    # extract the pairs. listA and listB hold corresponding pairs from selections 1 and 2, respectively.
+    foreach {listB1 listC2} [measure contacts $cutoff $B1 $C2] break
+    
+    # extract the pairs. listA and listB hold corresponding pairs from selections 1 and 2, respectively.
+    foreach {listB2 listD2} [measure contacts $cutoff $B2 $D2] break
+    
+    # go through the pairs, assign distances
+    foreach indA1 $listA1 indC1 $listC1 {
+      # calculated distance between 2 atoms
+      set distAC [vecdist [lindex $allPos $indA1] [lindex $allPos $indC1]]
+
+      # get information about residue id's
+      set residA1 [lindex $allResid $indA1]
+      set residC1 [lindex $allResid $indC1]
+      # following code can be uncommented for testing purposes
+      #set resnameA1 [lindex $allResname $indA1]
+      #set resnameC1 [lindex $allResname $indC1]
+      #puts "$residA1 $resnameA1 $residC1 $resnameC1 $distAC"
+    
+      # results will be stored in [residA,residB][list of distances] array
+      lappend contactTableAC($residA1,$residC1) $distAC
+    }
+
+    # go through the pairs, assign distances
+    foreach indA2 $listA2 indD1 $listD1 {
+      # calculated distance between 2 atoms
+      set distAD [vecdist [lindex $allPos $indA2] [lindex $allPos $indD1]]
+
+      # get information about residue id's
+      set residA2 [lindex $allResid $indA2]
+      set residD1 [lindex $allResid $indD1]
+      # following code can be uncommented for testing purposes
+      #set resnameA2 [lindex $allResname $indA2]
+      #set resnameD1 [lindex $allResname $indD1]
+      #puts "$residA2 $resnameA2 $residD1 $resnameD1 $distAD"
+    
+      # results will be stored in [residA,residB][list of distances] array
+      lappend contactTableAD($residA2,$residD1) $distAD
+    }
+    
+     # go through the pairs, assign distances
+    foreach indB1 $listB1 indC2 $listC2 {
+      # calculated distance between 2 atoms
+      set distBC [vecdist [lindex $allPos $indB1] [lindex $allPos $indC2]]
+
+      # get information about residue id's
+      set residB1 [lindex $allResid $indB1]
+      set residC2 [lindex $allResid $indC2]
+      # following code can be uncommented for testing purposes
+      #set resnameB1 [lindex $allResname $indB1]
+      #set resnameC2 [lindex $allResname $indC2]
+      #puts "$residB1 $resnameB1 $residC2 $resnameC2 $distBC"
+    
+      # results will be stored in [residA,residB][list of distances] array
+      lappend contactTableBC($residB1,$residC2) $distBC
+    }
+    
+     # go through the pairs, assign distances
+    foreach indB2 $listB2 indD2 $listD2 {
+      # calculated distance between 2 atoms
+      set distBD [vecdist [lindex $allPos $indB2] [lindex $allPos $indD2]]
+
+      # get information about residue id's
+      set residB2 [lindex $allResid $indB2]
+      set residD2 [lindex $allResid $indD2]
+      # following code can be uncommented for testing purposes
+      #set resnameB2 [lindex $allResname $indB2]
+      #set resnameD2 [lindex $allResname $indD2]
+      #puts "$residB2 $resnameB2 $residD2 $resnameD2 $distBD"
+    
+      # results will be stored in [residA,residB][list of distances] array
+      lappend contactTableBD($residB2,$residD2) $distBD
+    }
+    
+    
+    foreach name [array names contactTableAC] {
+      # assign residue names to residue numbers
+      foreach {residA1 residC1} [split $name ,] break
+      foreach {tmp resnameA1} [split [array get mapResidResname $residA1] ] break
+      foreach {tmp resnameC1} [split [array get mapResidResname $residC1] ] break
+      # get minimum contact distance for the pair
+      foreach {tmp distanceListAC} [array get contactTableAC $name] break
+      set minDistanceAC [lindex [lsort -real $distanceListAC] 0]
+
+      # print to output file
+      puts $fallA1C1 [format "%s - %f" $i $minDistanceAC]
+      flush $fallA1C1
+
+      # store all contacts for residue pair (whole trajectory)
+      lappend contactA1C1($residA1,$residC1) $minDistanceAC
+      # store all contacts for residueA
+      lappend contactA($residA1) $minDistanceAC
+      # store all contacts for residueA
+      lappend contactB($residC1) $minDistanceAC
+    }
+    
+    
+        foreach name [array names contactTableAD] {
+      # assign residue names to residue numbers
+      foreach {residA2 residD1} [split $name ,] break
+      foreach {tmp resnameA2} [split [array get mapResidResname $residA2] ] break
+      foreach {tmp resnameD1} [split [array get mapResidResname $residD1] ] break
+      # get minimum contact distance for the pair
+      foreach {tmp distanceListAD} [array get contactTableAD $name] break
+      set minDistanceAD [lindex [lsort -real $distanceListAD] 0]
+
+      # print to output file
+      puts $fallA2D1 [format "%s - %f" $i $minDistanceAD]
+      flush $fallA2D1
+
+      # store all contacts for residue pair (whole trajectory)
+      lappend contactA2D1($residA2,$residD1) $minDistanceAD
+      # store all contacts for residueA
+      lappend contactA($residA2) $minDistanceAD
+      # store all contacts for residueA
+      lappend contactB($residD1) $minDistanceAD
+    }
+    
+     foreach name [array names contactTableBC] {
+      # assign residue names to residue numbers
+      foreach {residB1 residC2} [split $name ,] break
+      foreach {tmp resnameB1} [split [array get mapResidResname $residB1] ] break
+      foreach {tmp resnameC2} [split [array get mapResidResname $residC2] ] break
+      # get minimum contact distance for the pair
+      foreach {tmp distanceListBC} [array get contactTableBC $name] break
+      set minDistanceBC [lindex [lsort -real $distanceListBC] 0]
+
+      # print to output file
+      puts $fallB1C2 [format "%s - %f" $i $minDistanceBC]
+      flush $fallB1C2
+
+      # store all contacts for residue pair (whole trajectory)
+      lappend contactB1C2($residB1,$residC2) $minDistanceBC
+      # store all contacts for residueA
+      lappend contactB1($residB1) $minDistanceBC
+      # store all contacts for residueA
+      lappend contactB1($residB1) $minDistanceBC
+    }
+    
+     foreach name [array names contactTableBD] {
+      # assign residue names to residue numbers
+      foreach {residB2 residD2} [split $name ,] break
+      foreach {tmp resnameB2} [split [array get mapResidResname $residB2] ] break
+      foreach {tmp resnameD2} [split [array get mapResidResname $residD2] ] break
+      # get minimum contact distance for the pair
+      foreach {tmp distanceListBD} [array get contactTableBD $name] break
+      set minDistanceBD [lindex [lsort -real $distanceListBD] 0]
+
+      # print to output file
+      puts $fallB2D2 [format "%s - %f" $i $minDistanceBD]
+      flush $fallB2D2
+
+      # store all contacts for residue pair (whole trajectory)
+      lappend contactB2D2($residB2,$residD2) $minDistanceBD
+      # store all contacts for residueA
+      lappend contactA($residB2) $minDistanceBD
+      # store all contacts for residueA
+      lappend contactB($residD2) $minDistanceBD
+    }
+
+    # delete the contact table - will be created again in the next loop
+    if {[info exists contactTableAC]} {
+      unset contactTableAC
+    }
+     if {[info exists contactTableAD]} {
+      unset contactTableAD
+    }
+     if {[info exists contactTableBC]} {
+      unset contactTableBC
+    }
+     if {[info exists contactTableBD]} {
+      unset contactTableBD
+    }
+  }
+  close $fallA1C1
+  close $fallA2D1
+  close $fallB1C2
+  close $fallB2D2
+  
+  #opens and writes to file at the end with $data3
+  set filetotal "total_contactsACBD_ADBC.txt"
+  set data3 [open $filetotal "w"] 
+  
+  #reads file below and stores it as $f  
+  set f [open "contacts&Distance_A1C1.dat"]
+  set lines [split [read $f] "\n"]
+  close $f
+  
+  
+  #seprates file by column and stores each column in a variable such as $keys and $values
+  set keys [set values {}]
+  foreach line $lines {
+    if {[regexp {^([^=]*)-(.*)$} $line -> key value]} {
+        lappend keys $key
+        lappend values $value
+    } else {
+       
+    }
+}
+  #does the same as above but different files
+  set h [open "contacts&Distance_B2D2.dat"]
+  set lines1 [split [read $h] "\n"]
+  close $h
+  
+  
+  #does the same as above but different files
+  set keys1 [set values1 {}]
+  foreach line1 $lines1 {
+    if {[regexp {^([^=]*)-(.*)$} $line1 -> key1 value1]} {
+        lappend keys1 $key1
+        lappend values1 $value1
+    } else {
+       
+    }
+}
+ 
+  # reads all values from both files above and compares them with each other if they match it counts and sets the matching value into a file  
+  set j 0
+  set fileACBD "framesA1C1-B2D2.txt"
+  set data [open $fileACBD "w"]   
+  set length [llength $keys]
+  for {set x 0} {$x<$length} {incr x} {
+    set index [lindex $keys $x]
+    set search [lsearch -inline $keys1 $index] 
+    set compare [string equal $index $search]
+      if {$compare == 1} {
+      
+        lappend contacts $search
+        set j [incr j]
+        puts $data [format "%s" [string trim $contacts "{}"]]
+        puts $data3 [format "%s" [string trim $contacts "{}"]]
+        
+   
+        
+    } 
+     
+     
+      flush stdout
+      
+      if {[info exists contacts]} {
+      unset contacts
+    }
+   if {[info exists $j]} {
+      unset $j
+    }
+    
+}
+  
+  
+  set f2 [open "contacts&Distance_A2D1.dat"]
+  set lines2 [split [read $f2] "\n"]
+  close $f2
+  
+  
+  set keys2 [set values2 {}]
+  foreach line2 $lines2 {
+    if {[regexp {^([^=]*)-(.*)$} $line2 -> key2 value2]} {
+        lappend keys2 $key2
+        lappend values2 $value2
+    } else {
+       
+    }
+}
+
+
+  set h2 [open "contacts&Distance_B1C2.dat"]
+  set lines3 [split [read $h2] "\n"]
+  close $h2
+  
+  
+  set keys3 [set values3 {}]
+  foreach line3 $lines3 {
+    if {[regexp {^([^=]*)-(.*)$} $line3 -> key3 value3]} {
+        lappend keys3 $key3
+        lappend values3 $value3
+    } else {
+       
+    }
+}
+ 
+  
+ 
+  set jj 0
+  set fileADBC "framesA2D1-B1C2.txt"
+  set data2 [open $fileADBC "w"]   
+  set length2 [llength $keys2]
+  
+  
+  for {set xx 0} {$xx<$length2} {incr xx} {
+    set index2 [lindex $keys2 $xx]
+    set search2 [lsearch -inline $keys3 $index2] 
+    set compare2 [string equal $index2 $search2]
+      if {$compare2 == 1} {
+      
+        lappend contacts2 $search2
+        set jj [incr jj]
+        puts $data2 [format "%s" [string trim $contacts2 "{}"]]
+        puts $data3 [format "%s" [string trim $contacts2 "{}"]]
+        
+    } 
+     
+     
+      flush stdout
+      
+      if {[info exists contacts2]} {
+      unset contacts2
+    }
+   if {[info exists $jj]} {
+      unset $jj
+    }
+}
+
+  close $data3
+  close $data2
+  close $data
+  
+  
+  
+  
+  
+  
+  
+  set zfiletotal "total_contactsACBD_ADBC_cis.txt"
+  set zdata3 [open $zfiletotal "w"] 
+  
+    
+  set zf [open "total_contactsACBD_ADBC.txt" r]
+  set zlines [read $zf]
+  close $zf
+  
+  
+  set zh [open "contact_all.dat" r]
+  set zlines1 [read $zh]
+  close $zh
+  
+ 
+  set zj 0
+  set zlength [llength $zlines]
+  
+  for {set zx 0} {$zx<$zlength} {incr zx} {
+    set zindex [lindex $zlines $zx]
+    set zsearch [lsearch -inline $zlines1 $zindex] 
+    set zcompare [string equal $zindex $zsearch]
+      if {$zcompare == 1} {
+      
+        lappend zcontacts $zsearch
+        set zj [incr zj]
+        puts $zdata3 [format "%s" [string trim $zcontacts "{}"]]
+        
+        
+   
+        
+    } 
+     
+     
+      flush stdout
+      
+      if {[info exists zcontacts]} {
+      unset zcontacts
+    }
+   if {[info exists $zj]} {
+      unset $zj
+    }
+    
+}
+  
+   puts $zdata3 [format "%s" "Total cis contacts: $zj at $cutoff A"]
+   close $zdata3
+   
+   set outfile [open "contacts.txt" w]
+   
+  puts ""    
+  puts "---------------------------------------------------------------"  
+  puts ""
+  puts "The contacts for A2D1-B1C2 is $j at $cutoff A"
+  puts ""
+  puts "The total number of contacts are $jj at $cutoff A"
+  puts ""
+  puts $outfile "The total number of contacts that are in cis conformation: $zj"
+  puts ""
+  puts "----------------------------------------------------------------"
+  puts "The total number of contacts that are in cis conformation: $zj"
+  puts "----------------------------------------------------------------"
+  puts ""
+  puts "Done Bro, Done"
+  puts ""
+  puts "-------------------------------------------------------------"
+  puts "credits:"
+  puts ""
+  puts "Mgr Lubos Vrbka, Jacob Parkman, Gabriel Valdivia Berroeta, Steven Jacobsen"
+  puts "Caleb Barksdale was here"
+  puts "-------------------------------------------------------------"
+  cd ..
+} 
+proc superTickle1 { sel1 sel2 cutoff counter args} {
+
+ file mkdir contacts_$counter
+  cd contacts_$counter
+  # get index of the last frame
+  set numframes [expr {[molinfo top get numframes] - 1}]
+  puts "total number of frames: $numframes"
+  if {[llength $args] == 0} {
+    set startframe 0
+    set endframe $numframes
+  }
+  if {[llength $args] == 1} {
+    set startframe [lindex $args 0]
+    set endframe $numframes
+    if {$startframe < 0} {
+      puts "illegal value of startframe, changing to 0"
+      set startframe 0
+    }
+  }
+  if {[llength $args] > 1} {
+    set startframe [lindex $args 0]
+    set endframe [lindex $args 1]
+    if {$startframe < 0} {
+      puts "illegal value of startframe, changing to 0"
+      set startframe 0
+    }
+    if {$endframe > $numframes} {
+      puts "illegal value of endframe, changing to $numframes"
+      set startframe 0
+    }
+  }
+  set totframes [expr $endframe - $startframe + 1]
+  puts "analysis will be performed on $totframes frame(s) ($startframe to $endframe)"
+
+  # make some mappings
+  set all [atomselect top all]
+  # resid map for every atom
+  set allResid [$all get residue]
+  # resname map for every atom
+  set allResname [$all get resname]
+  # create resid->resname map
+  foreach resID $allResid resNAME $allResname {
+    set mapResidResname($resID) $resNAME
+  }
+
+  # create specified atom selections
+  set A [atomselect top $sel1]
+  set B [atomselect top $sel2]
+
+  # output file for printing out all contacts
+  set fileAll "contact_all.dat"
+  set fall [open $fileAll w]
+  
+  # cycle over the trajectory
+  for {set i $startframe; set d 1} {$i <= $endframe} {incr i; incr d} {
+    # show activity
+    if { [expr $d % 10] == 0 } {
+      puts -nonewline "."
+      if { [expr $d % 500] == 0 } { puts " " }
+      flush stdout
+    }
+    
+    # update selections
+    # we expect that atom assignments didn't change
+    $all frame $i
+    $all update
+    $A frame $i
+    $A update
+    $B frame $i
+    $B update
+    # position for every atom
+    set allPos [$all get {x y z}]
+    
+    # extract the pairs. listA and listB hold corresponding pairs from selections 1 and 2, respectively.
+    foreach {listA listB} [measure contacts $cutoff $A $B] break
+
+    # go through the pairs, assign distances
+    foreach indA $listA indB $listB {
+      # calculated distance between 2 atoms
+      set dist [vecdist [lindex $allPos $indA] [lindex $allPos $indB]]
+
+      # get information about residue id's
+      set residA [lindex $allResid $indA]
+      set residB [lindex $allResid $indB]
+      # following code can be uncommented for testing purposes
+      #set resnameA [lindex $allResname $indA]
+      #set resnameB [lindex $allResname $indB]
+      #puts "$residA $resnameA $residB $resnameB $dist"
+    
+      # results will be stored in [residA,residB][list of distances] array
+      lappend contactTable($residA,$residB) $dist
+    }
+
+    foreach name [array names contactTable] {
+      # assign residue names to residue numbers
+      foreach {residA residB} [split $name ,] break
+      foreach {tmp resnameA} [split [array get mapResidResname $residA] ] break
+      foreach {tmp resnameB} [split [array get mapResidResname $residB] ] break
+      # get minimum contact distance for the pair
+      foreach {tmp distanceList} [array get contactTable $name] break
+      set minDistance [lindex [lsort -real $distanceList] 0]
+
+      # print to output file
+      puts $fall [format "%-5d" $i]
+      flush $fall
+
+      # store all contacts for residue pair (whole trajectory)
+      lappend contactAB($residA,$residB) $minDistance
+      # store all contacts for residueA
+      lappend contactA($residA) $minDistance
+      # store all contacts for residueA
+      lappend contactB($residB) $minDistance
+    }
+    # delete the contact table - will be created again in the next loop
+    if {[info exists contactTable]} {
+      unset contactTable
+    }
+  }
+  close $fall
+
+#
+# Count the number of lines in a text file
+#
+set infile [open "contact_all.dat" r]
+set number 0
+
+#
+# gets with two arguments returns the length of the line,
+# -1 if the end of the file is found
+#
+while { [gets $infile line] >= 0 } {
+    incr number
+}
+close $infile
+
+puts "Number of Contacts: $number"
+
+#
+# Also report it in an external file
+#
+set outfile [open "contacts.out" w]
+puts $outfile "Number of Contacts: $number"
+close $outfile
+cd ..
+  puts "done"
+EOF
+} 
+ 
+ 
+
+
+
+
+
+
+function heat () {
+  echo "Heat
+   &cntrl
+    imin=0,
+    ntx=1,
+    irest=0,
+    nstlim=10000,
+    dt=0.002,
+    ntf=2,
+    ntc=2,
+    tempi=0.0,
+    temp0=$TEMPK,
+    ntpr=100,
+    ntwx=100,
+    cut=10.0,
+    ntb=1,
+    ntp=0,
+    ntt=3,
+    gamma_ln=2.0,
+    nmropt=1,
+    ig=-1,
+   /
+  &wt type='TEMP0', istep1=0, istep2=9000, value1=0.0, value2=$TEMPK /
+  &wt type='TEMP0', istep1=9001, istep2=10000, value1=$TEMPK, value2=$TEMPK /
+  &wt type='END' /" >> heat.in
+
+}        #Writes the heat.in input file
+
+#Time for prod in needs to be the number of ns for each piece
+function prod () {
+  TOTAL_PIECES=$(($PIECE + 1))
+  NSTIME=$(( $NS * 1000000 / $TOTAL_PIECES))
+  echo "Production
+   &cntrl
+    imin=0,
+    ntx=5,
+    irest=1,
+    nstlim=${NSTIME},
+    dt=0.001,
+    ntf=1,
+    ntc=1,
+    temp0=$TEMPK,
+    ntpr=200,
+    ntwx=500,
+    ntwr=10,
+    cut=10.0,
+    ntb=2,
+    PRES0=1.0,
+    ntp=1,
+    taup=2.0,
+    ntt=3,
+    gamma_ln=2.0,
+    ig=-1,
+   /" >> prod.in
+}         #Writes the prod.in input file
+
+function press () {
+  echo "Production
+   &cntrl
+    imin=0,
+    ntx=5,
+    irest=1,
+    nstlim=2000,
+    dt=0.001,
+    ntf=1,
+    ntc=1,
+    temp0=$TEMPK,
+    ntpr=200,
+    ntwx=500,
+    ntwr=10,
+    cut=10.0,
+    ntb=2,
+    PRES0=100,
+    ntp=1,
+    taup=2.0,
+    ntt=3,
+    gamma_ln=2.0,
+    ig=-1,
+   /" >> press.in
+}         #Writes the press.in input file
+
+
+# WE MIGHT CHANGE THIS
+function min () {
+  echo "Minimize
+   &cntrl
+    imin=1,
+    maxcyc=5000,
+    ntpr=100,
+    ntx=1,
+    irest=0,
+    ncyc=2000,
+    ntwx=0,
+    cut=10.0,
+   /" >> min.in
+}        #Writes the min.in input file
+
+function getTemp () {
+  echo -e "
+${BOLD}What is the temperature for this run? (C)${RESET}"
+  read -p "[No Default] >> " TEMP
+  case $TEMP in
+    ''|*[!0-9]*)
+      echo "
+Please enter a numerical value in C"
+      getTemp
+      ;;
+    *)
+      TEMPK=`python -c "print(round(${TEMP}+273.15,2))"`
+      echo "Temperature set to $TEMP C ($TEMPK K)"
+      ;;
+  esac
+}
+
+function getSimulationTime () {
+  echo ""
+  echo -e "${BOLD}How many nanoseconds do you want to run the simulation for? (Default ${NS} for ${DEF})${RESET}"
+  read -p "[Default ${NS}] >> " NS_INPUT
+  case $NS_INPUT in
+    ''|*[!0-9]*)
+      NS=20
+      echo "Run time set to the default $NS ns"
+      ;;
+    *)
+      NS=$NS_INPUT
+      echo "Run time set to $NS ns"
+  esac
+}
+
+function getNumberOfPieces (){
+  echo ""
+  echo -e "${BOLD}How many pieces do you want to run (Default ${PIECE} for ${DEF})?${RESET}"
+  read -p "[Default 16] >> " PIECE_INPUT
+  case $PIECE in
+    ''|*[!0-9]*)
+      PIECE=16
+      echo "Preparing to run $PIECE pieces (Default)"
+      ;;
+    *)
+      PIECE=$PIECE_INPUT
+      echo "Preparing to run $PIECE pieces"
+  esac
+  echo ""
+
+  echo ""
+  echo -e "${BOLD}How many runs do you want to do?${RESET}"
+  read -p "[Default 5] >> " RUNS_INPUT
+  case $PIECE in
+    ''|*[!0-9]*)
+      RUNS=5
+      echo "Preparing to run $RUNS runs (Default)"
+      ;;
+    *)
+      RUNS=$RUNS_INPUT
+      echo "Preparing to run $RUNS runs"
+  esac
+  echo ""
+}
+
+function getRuntime () {
+  echo -e "${BOLD}Set the runtime for each piece (ENTER 2 DIGIT NUMBERS)${RESET}"
+  read -p "DAYS: [Default ${DAYS}] >> " DAYS_INPUT
+  case ${#DAYS_INPUT} in
+    2)
+      true
+      ;;
+    0)
+      true
+      ;;
+    *)
+      echo -e "${RED}${BOLD}ENTER A 2 Digit Variable${RESET}"
+      getRuntime
+      return 1
+      ;;
+  esac
+  read -p "HRS:  [Default ${HRS}] >> " HRS_INPUT
+  case ${#HRS_INPUT} in
+    2)
+     true
+     ;;
+   0)
+     true
+     ;;
+    *)
+    echo -e "${RED}${BOLD}ENTER A 2 Digit Variable${RESET}"
+    getRuntime
+    return 1
+    ;;
+  esac
+  read -p "MIN:  [Default ${MINS}] >> " MINS_INPUT
+  case ${#MINS_INPUT} in
+    2)
+      true
+      ;;
+    0)
+      true
+      ;;
+    *)
+      echo -e "${RED}${BOLD}ENTER A 2 Digit Variable${RESET}"
+      getRuntime
+      return 1
+      ;;
+  esac
+  case $DAYS_INPUT in
+    ''|*[!0-9]*)
+      echo "Runtime set to $DAYS days (Default)"
+      ;;
+    *)
+      DAYS=$DAYS_INPUT
+      echo "Runtime set to $DAYS days"
+  esac
+  case $HRS_INPUT in
+    ''|*[!0-9]*)
+      echo "Runtime set to $HRS HRS (Default)"
+      ;;
+    *)
+      HRS=$HRS_INPUT
+      echo "Runtime set to $HRS HRS"
+  esac
+  case $MINS_INPUT in
+    ''|*[!0-9]*)
+      echo "Runtime set to $MINS MINS (Default)"
+      ;;
+    *)
+      MINS=$MINS_INPUT
+      echo "Runtime set to $MINS MINS"
+  esac
+  echo -e "
+${BOLD}Is the following runtime correct
+(DD-HH:MM)${RESET}?
+${DAYS}-${HRS}:${MINS}"
+  read -p "[Yes] >> " SEL
+  if [ "$SEL" = "" ]; then
+    echo "Runtime saved"
+    return 1
+  else
+    echo ""
+    getRuntime
+    return 1
+  fi
+}         #Gets the correct getRuntime for the run
+
+function getMemory () {
+  echo ""
+  echo -e "${BOLD}Set the memory requirements per node${RESET}"
+  read -p "Pieces 1-$PIECE: [Default ${MEM}] >> " MEM_INPUT
+  #read -p "The Final Piece: [Default $MEM_LAST] >> " MEM_LAST_INPUT
+  read -p "Memory Type (MB = M, GB = G):
+[Default ${MEM_TYPE}] >> " MEM_TYPE_INPUT
+  read -p "
+Number of Cores: [Default ${CORES}] >> " CORES_INPUT
+  read -p "Number of Nodes [Default ${NODES}] >> " NODES_INPUT
+  case $MEM_INPUT in
+     ''|*[!0-9]*)
+      echo "Memory set to $MEM $MEM_TYPE per node"
+      ;;
+    *)
+    MEM=$MEM_INPUT
+    echo "Memory set to $MEM $MEM_TYPE per node"
+      ;;
+  esac
+  # case $MEM_LAST in
+  #    ''|*[!0-9]*)
+  #     MEM_LAST=700
+  #     echo "Memory set to $MEM_LAST $MEM_TYPE per node"
+  #     ;;
+  #   *)
+  #   echo "Memory set to $MEM_LAST $MEM_TYPE per node"
+  #     ;;
+  # esac
+  case $CORES_INPUT in
+     ''|*[!0-9]*)
+      echo "Set to run on $CORES cores"
+      ;;
+    *)
+      CORES=$CORES_INPUT
+      echo "Set to run on $CORES cores"
+      ;;
+  esac
+  case $NODES_INPUT in
+     ''|*[!0-9]*)
+      echo "Set to run on $NODES nodes"
+      ;;
+    *)
+      NODES=$NODES_INPUT
+      echo "Set to run on $NODES nodes"
+      ;;
+  esac
+  echo -e "
+${BOLD}Is the following memory correct${RESET}?
+Pieces 1-$PIECE: ${MEM}${MEM_TYPE} per node
+# Final Piece: $MEM_LAST M per node
+Running on ${NODES} nodes and ${CORES} cores per node"
+  read -p "[Yes] >> " SEL
+  case $SEL in
+    ""| [yY] | YES | yes | Yes)
+      echo "Memory requirements saved"
+      ;;
+    *)
+      echo ""
+      getMemory
+      ;;
+  esac
+}         #Gets the correct memory for the run
+
+function simData () {
+echo -e "
+${BOLD}Would you Like to Use the Simulation Defaults for ${DEF}?${RESET}
+  Run Time: ${DAYS}:${HRS}:${MINS} (DD-HH:MM)
+  Nodes Used: ${NODES}
+  Cores per Node: ${CORES}
+  Simulation Time: ${NS} ns
+  Pieces: ${PIECE}
+  Memory Per Piece: ${MEM}${MEM_TYPE} 
+  Runs: ${RUNS}
+"
+read -p "[Yes] >> " SYSTEM
+
+case $SYSTEM in
+  no|NO|No|nO|n|N )
+    getSimulationTime
+    getNumberOfPieces
+    getRuntime
+    getMemory
+    ;;
+  * )
+    true
+    ;;
+esac
+
+}
+
+#############################################################################################
+#  _______ _    _ ______  _____ ______    __      __     _     _    _ ______  _____ 
+#|__   __| |  | |  ____|/ ____|  ____|   \ \    / /\   | |   | |  | |  ____|/ ____|
+#   | |  | |__| | |__  | (___ | |__       \ \  / /  \  | |   | |  | | |__  | (___  
+#   | |  |  __  |  __|  \___ \|  __|       \ \/ / /\ \ | |   | |  | |  __|  \___ \ 
+#   | |  | |  | | |____ ____) | |____       \  / ____ \| |____ |__| | |____ ____) |
+#   |_|  |_|  |_|______|_____/|______|       \/_/    \_\______\____/|______|_____/ 
+# 
+#           _____  ______     _   _  ____ _______ 
+#    /\   |  __ \|  ____|   | \ | |/ __ \__   __|
+#   /  \  | |__) | |__      |  \| | |  | | | |   
+#  / /\ \ |  _  /|  __|     | . ` | |  | | | |   
+# / ____ \| | \ \| |____    | |\  | |__| | | |   
+#/_/    \_\_|  \_\______|   |_| \_|\____/  |_|                                                                                                                                        
+#    
+#
+#
+#   _____ ____  _____  _____  ______ _____ _______ 
+#  / ____/ __ \|  __ \|  __ \|  ____/ ____|__   __|
+# | |   | |  | | |__) | |__) | |__ | |       | |   
+# | |   | |  | |  _  /|  _  /|  __|| |       | |   
+# | |____ |__| | | \ \| | \ \| |____ |____   | |   
+#  \_____\____/|_|  \_\_|  \_\______\_____|  |_|   
+#############################################################################################
+
+function getSolvent () {
+  echo -e "
+${BOLD}WHAT SOLVENT ARE YOU USING?${RESET}
+(1) Nitromethane           (3) Water
+(2) DCM                    (4) Methanol
+"
+    read -p "[No Default] >> " SOLVENT
+    case $SOLVENT in
+      1 )
+        SOLVENTBOX='nitromethanebox'
+        SOLVENTFRCMOD='nitromethane.frcmod'
+        ;;
+      2 )
+        SOLVENTBOX='dcmbox'
+        SOLVENTFRCMOD='dcm.frcmod'
+        ;;
+      3 )
+        SOLVENTBOX='water'
+        SOLVENTFRCMOD='water.frcmod'
+        ;;
+      4 )
+        SOLVENTBOX='methanol'
+        SOLVENTFRCMOD='methanol.frcmod'
+        ;;
+      * )
+        echo -e "${RED}Your choice was not recognized.
+${RESET}"
+        getSolvent
+        ;;
+    esac
+}
+
+
+
+
+
+###############################################################################
+#                             SETTING VARS
+###############################################################################
+
+echo -e "
+${BOLD}WHAT TYPE OF REACTION ARE YOU RUNNING?${RESET}
+(1) One Diene           (3) One Indole
+(2) Multiple Dienes     (4) Multiple Indoles
+"
+read -p "[No Default] >> " DEF
+case $DEF in
+  1)
+   echo -e "
+${BOLD}Would you Like to Use the Defaults for One Diene?
+  ${RESET}Solvent: Nitromethane
+  Temperature: 277.15 K (4 C)
+ "
+  read -p "[Yes] >> " SEL
+  DEF="One Diene"
+    ;;
+  2)
+  echo -e "
+${BOLD}Would you Like to Use the Defaults for Multiple Dienes?
+  ${RESET}Solvent: Nitromethane
+  Temperature: 277.15 K (4 C)
+ "
+  read -p "[Yes] >> " SEL
+  DEF="Multiple Dienes"
+    ;;
+  3)
+ echo -e "
+${BOLD}Would you Like to Use the Defaults for One Indole?
+  ${RESET}Solvent: DCM
+  Temperature: 193.15 K (-80 C)
+ "
+  read -p "[Yes] >> " SEL 
+  DEF="One Indole"
+    ;;
+  4)
+ echo -e "
+${BOLD}Would you Like to Use the Defaults for Multiple Indoles?
+  ${RESET}Solvent: DCM
+  Temperature: 193.15 K (-80 C)
+ "
+  read -p "[Yes] >> " SEL
+  DEF="Multiple Indoles"
+    ;;
+  *)
+   echo -e "${BOLD}
+No default choice was selected. Manual input will be required.
+   ${RESET}"
+   DEF=""
+   SEL='no'
+    ;;
+esac
+
+case $SEL in
+  no|NO|No|nO|n|N )
+    SOLVENTBOX=None
+    SOLVENTFRCMOD=None
+    TEMP=None
+    TEMPK=None
+    DAYS_A=None
+    HRS_A=None
+    MINS_A=None
+    NODES_A=None
+    CORES_A=None
+    MEM_A=None
+    MEM_TYPE_A=None
+    SUBS=None
+    ANALYSIS_SCRIPT=None
+    DAYS=None
+    HRS=None
+    MINS=None
+    MEM=None
+    MEM_LAST=None
+    MEM_TYPE=None
+    NODES=None
+    CORES=None
+    NS=None
+    PIECE=None
+    RUNS=None
+    getTemp
+    getSolvent
+    getNumSubs
+    getSimulationTime
+    getNumberOfPieces
+    getRuntime
+    getMemory
+    ;;
+  * )
+    case $DEF in
+      'One Diene' )
+        SOLVENTBOX='nitromethanebox'
+        SOLVENTFRCMOD='nitromethane.frcmod'
+        TEMP=4
+        TEMPK=`python -c "print(round(${TEMP}+273.15,2))"`
+        DAYS_A=00
+        HRS_A=01        #
+        MINS_A=00       # ANALYSIS INFORMATION
+        NODES_A=1       #
+        CORES_A=1       
+        MEM_A=750
+        MEM_TYPE_A=M
+        SUBS=1
+        ANALYSIS_SCRIPT="one_diene.sh"
+        DAYS=00
+        HRS=11
+        MINS=30
+        MEM=120
+        MEM_LAST=750
+        MEM_TYPE=M
+        NODES=1
+        CORES=16
+        NS=100
+        PIECE=16
+        RUNS=5
+        simData
+        SUB_INFO=$DEF
+        SUB_SPLIT=100
+        ;; 
+      'Multiple Dienes' )
+        SOLVENTBOX='nitromethanebox'
+        SOLVENTFRCMOD='nitromethane.frcmod'
+        TEMP=4
+        TEMPK=`python -c "print(round(${TEMP}+273.15,2))"`
+        DAYS_A=00
+        HRS_A=06
+        MINS_A=00       # ANALYSIS INFORMATION
+        NODES_A=1
+        CORES_A=1
+        MEM_A=750
+        MEM_TYPE_A=M
+        getNumSubs
+        ANALYSIS_SCRIPT="multiple_dienes.sh"
+        DAYS=00
+        HRS=17
+        MINS=00
+        MEM=120
+        MEM_LAST=750
+        MEM_TYPE=M
+        NODES=1
+        CORES=16
+        NS=100
+        PIECE=16
+        RUNS=5
+        simData
+        SUB_INFO="${NUM_SUB_TYPES} Different Subs with ${SUB_SPLIT} Molecules of Each"
+        ;;
+      'One Indole' )
+        SOLVENTBOX='dcmbox'
+        SOLVENTFRCMOD='dcm.frcmod'
+        TEMP=-80
+        TEMPK=`python -c "print(round(${TEMP}+273.15,2))"`
+        DAYS_A=00
+        HRS_A=01
+        MINS_A=00       # ANALYSIS INFORMATION
+        NODES_A=1
+        CORES_A=1
+        MEM_A=750
+        MEM_TYPE_A=M
+        SUBS=1
+        ANALYSIS_SCRIPT="one_indole.sh"
+        DAYS=00
+        HRS=11
+        MINS=30
+        MEM=120
+        MEM_LAST=750
+        MEM_TYPE=M
+        NODES=1
+        CORES=16
+        NS=20
+        PIECE=16
+        RUNS=5
+        simData
+        SUB_INFO=$DEF
+        SUB_SPLIT=100
+        ;;
+      'Multiple Indoles' )
+        SOLVENTBOX='dcmbox'
+        SOLVENTFRCMOD='dcm.frcmod'
+        TEMP=-80
+        TEMPK=`python -c "print(round(${TEMP}+273.15,2))"`
+        DAYS_A=00
+        HRS_A=06
+        MINS_A=00
+        NODES_A=1       # ANALYSIS INFORMATION
+        CORES_A=1
+        MEM_A=750
+        MEM_TYPE_A=M
+        getNumSubs
+        ANALYSIS_SCRIPT="multiple_indoles.sh"
+        DAYS=00
+        HRS=17
+        MINS=00
+        MEM=120
+        MEM_LAST=750
+        MEM_TYPE=M
+        NODES=1
+        CORES=16
+        NS=20
+        PIECE=16
+        RUNS=5
+        simData
+        SUB_INFO="${NUM_SUB_TYPES} Different Subs with ${SUB_SPLIT} Molecules of Each"
+        ;;
+    esac
+    ;;
+esac
+
+
+
+
+#PROMPT FOR HOW MANY OF EACH SUBSTRATE
+
+#GET TEST VARIABLE
+#TEST=#SBATCH --qos=test
+
+
+clear
+ echo ' 
+               _____  _    _ _   _    
+              |  __ \| |  | | \ | |   
+              | |__) | |  | |  \| |   
+              |  _  /| |  | | . ` |   
+              | | \ \| |__| | |\  |   
+              |_|  \_\\____/|_| \_|   
+  _____ _    _ __  __ __  __          _______     __
+ / ____| |  | |  \/  |  \/  |   /\   |  __ \ \   / /
+| (___ | |  | | \  / | \  / |  /  \  | |__) \ \_/ / 
+ \___ \| |  | | |\/| | |\/| | / /\ \ |  _  / \   /  
+ ____) | |__| | |  | | |  | |/ ____ \| | \ \  | |   
+|_____/ \____/|_|  |_|_|  |_/_/    \_\_|  \_\ |_|   
+ '
+
+echo "
+            SOLVENT:       ${SOLVENTBOX} | ${SOLVENTFRCMOD}
+            TEMP (C):      ${TEMP}
+            TEMP (K):      ${TEMPK}
+            RUNTIME:       ${DAYS}-${HRS}:${MINS}
+            MEMORY:        ${MEM}${MEM_TYPE}
+            MEMORY LAST:   ${MEM_LAST}${MEM_TYPE}
+            NODES:         ${NODES}
+            CORES:         ${CORES}
+            SIM TIME:      ${NS} ns
+            PIECES:        ${PIECE}
+            RUNS:          ${RUNS}"
+read -p "
+Is everything correct?
+[Yes] >> " SEL
+case $SEL in
+  no|NO|No|nO|n|N )
+    
+    echo -e "${RED}${BOLD}"
+ echo '  _____  ______  _____ _______       _____ _______ _____ _   _  _____ 
+ |  __ \|  ____|/ ____|__   __|/\   |  __ \__   __|_   _| \ | |/ ____|
+ | |__) | |__  | (___    | |  /  \  | |__) | | |    | | |  \| | |  __ 
+ |  _  /|  __|  \___ \   | | / /\ \ |  _  /  | |    | | | . ` | | |_ |
+ | | \ \| |____ ____) |  | |/ ____ \| | \ \  | |   _| |_| |\  | |__| |
+ |_|  \_\______|_____/   |_/_/    \_\_|  \_\ |_|  |_____|_| \_|\_____|'
+
+echo -e "${RESET}"
+    sleep 2
+    clear
+    bash writefiles.sh
+    exit 0
+    ;;
+  *)
+    true
+esac
+echo -e "${BOLD}WE ARE READY TO SUBMIT THESE JOBS. PLEASE PROVIDE A BATCH NUMBER${RESET}"
+read -p ">> " BATCHNUMBER
+
+case $BATCHNUMBER in
+  "" )
+    BATCHNUMBER=$RANDOM
+    echo -e "
+You didn't provide a batch number so I'm naming your batch
+BATCH ${BATCHNUMBER}
+Hope you like it  ${BOLD}¯\_(ツ)_/¯${RESET}
+"
+    sleep 1
+    ;;
+  * )
+    true
+    ;;
+esac
+
+TIME=$NS
+NUMBER=$RUNS
+#############################################################################################
+#   THE FOLLOWING FILES GO INTO EACH INDIVIDUAL $NS_$RUN FILE
+#############################################################################################
+
+echo $BIGGERFILE
+echo $SMALLERFILE
+
+FILE=carbon_locations.txt
+if [[ -f "$FILE" ]]; then
+  echo "The carbon_locations.txt file was found. Using this for contacts."
+else
+  echo "The carbon_locations.txt file was not found. Please provide this information."
+echo -e "
+${BOLD}WHAT IS THE FIRST CONTACT POINT ON THE CATALYST${RESET}"
+read PC1
+  case $DEF in
+     "One Diene" | "Multiple Dienes")
+      echo -e "
+${BOLD}WHAT IS THE SECOND CONTACT POINT ON THE CATALYST${RESET}"
+      read PC2
+      echo -e "
+${BOLD}WHAT IS THE FIRST CONTACT POINT ON THE SUBSTRATE${RESET}"
+      read SC1
+      echo -e "
+${BOLD}WHAT IS THE SECOND CONTACT POINT ON THE SUBSTRATE${RESET}"
+      read SC2
+      cat<<EOF> carbon_locations.txt 
+$PC1
+$PC2
+$SC1
+$SC2
+EOF
+      ;;
+     "One Indole" | "Multiple Indoles")
+      echo -e "
+${BOLD}WHAT IS THE FIRST CONTACT POINT ON THE SUBSTRATE${RESET}"
+      read SC1
+      cat<<EOF> carbon_locations.txt 
+$PC1
+$SC1
+EOF
+      ;;
+  esac
+fi
+
+echo "setting up $NUMBER runs"
+mkdir $DATE
+cd $DATE
+
+j=0
+
+for ((i=0;i <${NUMBER}; i++));
+do
+
+j=$((j+1))
+echo $j
+
+mkdir ${TIME}ns_$j;
+done
+
+k=0
+
+for ((l=0;l <${NUMBER}; l++))
+do
+
+k=$((k+1))
+
+cp $DIR/$SMALLERFILE.mol2 $DIR/$DATE/${TIME}ns_$k
+cp $DIR/$BIGGERFILE.mol2 $DIR/$DATE/${TIME}ns_$k
+cp $DIR/carbon_locations.txt $DIR/$DATE/${TIME}ns_$k
+cd $DIR/$DATE/${TIME}ns_$k
+
+min
+heat
+press
+prod
+
+PIECE=`python -c "print($PIECE-1)"`
+for ((NUM=0;NUM<=PIECE;NUM++)); do
+  case $NUM in
+    0)
+      sander_singleSubstrate > /dev/null 2>&1
+      sbatchSubmitPartOne
+      ;;
+    *)
+      OLD=`python -c "print($NUM-1)"`
+      middle_sander > /dev/null 2>&1
+      sbatchSubmitMiddlePart
+  esac
+done
+
+sbatchSubmitFinal
+#analyze
+analysisScript
+setup_singleSubstrate
+tickleScript
+
+
+echo "$BATCHNUMBER" > $DIR/$DATE/${TIME}ns_$k/BATCHNUMBER.txt;
+done
+
+
+g=0
+
+for ((m=0;m <${NUMBER}; m++))
+do
+
+g=$((g+1))
+
+cd $DIR/$DATE/${TIME}ns_$g
+
+bash setup.sh #NOT READY TO RUN THIS COMMAND!!!!!!!!!
+#echo "We would be running setup.sh here, but we aren't read to run this command yet!"
+cd ..
+done
+
+echo ' 
+               _____  _    _ _   _    
+              |  __ \| |  | | \ | |   
+              | |__) | |  | |  \| |   
+              |  _  /| |  | | . ` |   
+              | | \ \| |__| | |\  |   
+              |_|  \_\\____/|_| \_|   
+  _____ _    _ __  __ __  __          _______     __
+ / ____| |  | |  \/  |  \/  |   /\   |  __ \ \   / /
+| (___ | |  | | \  / | \  / |  /  \  | |__) \ \_/ / 
+ \___ \| |  | | |\/| | |\/| | / /\ \ |  _  / \   /  
+ ____) | |__| | |  | | |  | |/ ____ \| | \ \  | |   
+|_____/ \____/|_|  |_|_|  |_/_/    \_\_|  \_\ |_|   
+ ' &> $DIR/$DATE/BATCH_${BATCHNUMBER}.log
+echo "
+SOLVENT:          ${SOLVENTBOX} | ${SOLVENTFRCMOD}
+TEMP (C):         ${TEMP}
+TEMP (K):         ${TEMPK}
+RUNTIME:          ${DAYS}-${HRS}:${MINS}
+MEMORY:           ${MEM}${MEM_TYPE}
+MEMORY LAST:      ${MEM_LAST}${MEM_TYPE}
+NODES:            ${NODES}
+CORES:            ${CORES}
+SIM TIME:         ${NS} ns
+PIECES:           ${PIECE}
+RUNS:             ${RUNS}
+SUBSTRATE INFO:   ${SUB_INFO}
+BATCH:            ${BATCHNUMBER}" &>> $DIR/$DATE/BATCH_${BATCHNUMBER}.log
+echo "
+All jobs submitted for Batch ${BATCHNUMBER}"
+
+echo -e "${RED}"
+cowsay "If you accidentally screwed everything up, run the script 
+/zhome/${USER}/storage/OH_CRAP_I_MESSED_UP_${BATCHNUMBER}
+on the server to cancel this entire batch "
+echo -e "${RESET}"
+
+cowsay caleb wrote this

@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+
+import sys, re
+from getpass import getuser
+from subprocess import check_output as co
+from os import chdir, getcwd, popen
+
+user = getuser()
+directory = getcwd()
+
+def usage():
+	print("""
+Usage:
+	job/JOB 				Returns a list of your running jobs
+
+
+Optional Flags:
+	-h,  --help				Shows this Message
+	-pa, --path 				Displays the Working Directory for Printed Jobs
+	-pd, --pending 				Displays Pending Jobs
+	-a,  --all				Displays Jobs for Users Listed (Not Functional)
+	-n,  --name 			Displays the Job's Name
+
+	NOTE: requesting path and name simultaneously is not supported. Only the 
+""")
+
+def getJoblist(user):
+	out = []
+	output = co(['squeue','-u',user])
+	output = output.decode('utf-8').split('\n')
+	for i in output:
+		if i != '':
+			out.append(i.strip().split())
+	return out
+
+# def searchForPath(jobid):
+#     chdir('/fslhome/{}/compute/'.format(user))
+#     path = co(['find','-iname','slurm-{}.out'.format(jobid)])
+#     path=path.decode('utf-8').replace('\n','').replace('./','~/compute/').split('/')
+#     del path[-1]
+#     return "/".join(path)
+
+def getDct(jobid):
+	try:
+		text = co(['scontrol','show','job',jobid])
+	except:
+		print("ERROR: Cannot find details for job {}".format(jobid))
+		sys.exit()
+	text = text.decode('utf-8').split()
+	dct = {}
+	for i in text:
+		if ',' not in i:
+			try:
+				key, value = i.split('=')
+				dct[key] = value.strip()
+			except:pass
+	return dct
+
+def correctPath(path):
+	path = re.sub(r'/panfs/.*?{}'.format(user),'',path, flags=re.DOTALL)
+	if '/panfs/' in path and 'scr' in path:
+		path = re.sub(r'/panfs/.*?grp','/fsl_groups',path, flags=re.DOTALL)
+		path_list = path.split('/')
+		# for i in path_list:
+		tmp = path_list[-1]
+		path_list[-1] = 'compute'
+		path = "/".join(path_list) + '/' + tmp
+	path = path.replace("/lustre/scratch/usr/{}".format(user), "compute/")
+	if '/zhome/' not in path:
+		return "/zhome/{}".format(user) + path
+	else:
+		return path
+
+def getFormatting():
+	if PATH == True:
+		header = " {:-^107}".format('-')
+		body = "| {:^13}|{:^14}| {:<75} |"
+		return header, body, 108
+	elif NAME == True:
+		header = " {:-^70}".format('-')
+		body = "| {:^13}|{:^14}| {:^38} |"
+		return header, body, 71
+	else:
+		header = " {:-^29}".format('-')
+		body = "| {:^13}|{:^14}|"
+		return header, body, 30
+
+def printResults(running,pending):
+	rows, columns = popen('stty size', 'r').read().split()
+	header, body, dimensions = getFormatting()
+	if PATH == True:
+		print('\nSearching for all paths. This may ruin formatting...\n')
+		print(header)
+		print(body.format('JOBS RUNNING','TIME RUNNING', 'PATH TO JOB'))
+		print(header)
+		if PENDING:   
+				for i in pending:
+					if "[" in i:
+						pass
+					else:
+						dct = getDct(i)
+						path = correctPath(dct['WorkDir'])
+						print(body.format(i,'(PENDING)',path)) 
+		for i in running:
+			dct = getDct(i[0])
+			path = correctPath(dct['WorkDir'])
+			print(body.format(i[0],i[1],path))
+		print(header)
+	elif NAME == True:
+		print(header)
+		print(body.format('JOBS RUNNING','TIME RUNNING','JOB NAME'))
+		print(header)
+		if PENDING:
+			for i in pending:
+				if "[" in i:
+					pass
+				else:
+					dct = getDct(i)
+					name = dct['JobName']
+					print(body.format(i,'(PENDING)',name))
+		for i in running:
+			dct = getDct(i[0])
+			name = dct['JobName']
+			print(body.format(i[0],i[1],name))
+		print(header)
+	else:
+		print(header)
+		print(body.format('JOBS RUNNING','TIME RUNNING'))
+		print(header)
+		if PENDING:
+			for i in pending:
+				if "[" in i:
+					pass
+				else:
+					print(body.format(i,'(PENDING)'))
+		for i in running:
+			print(body.format(i[0],i[1]))
+		print(header)
+	print("{} jobs are pending\n{} jobs are currently running\n\n{} has {} jobs scheduled\n".format( len(pending), len(running), user, len(running)+len(pending)))
+
+def analyze(t):
+	pending = []
+	running = []
+	for l in t:
+	    if l[0].strip() != 'JOBID':
+	        if l[5] != '0:00':
+	            running.append((l[0],l[5]))
+	        else:
+	            pending.append(l[0])
+	return running, pending 
+
+def main():
+	out = getJoblist(user)
+	running,pending = analyze(out)
+	printResults(running,pending)
+
+if __name__ == '__main__':
+	PATH = False
+	PENDING = False
+	NAME = False
+	for i in range(1,len(sys.argv)):
+		if sys.argv[i] in ['-pa','--path']:
+			PATH = True
+			NAME = False
+		elif sys.argv[i] in ['-pd','--pending']:
+			PENDING = True
+		elif sys.argv[i] in ['-n', '--name']:
+			PATH = False
+			NAME = True
+		elif sys.argv[i] == '--all':
+			print('Shows everyone')
+		elif sys.argv[i] in ['-h','--help']:
+			usage()
+			sys.exit()
+		elif sys.argv[i] == '--other_flag':
+			print('Other Thing')
+		else:
+			print('Argument {} not Recognized, Ignoring.\nType job --help for a List of Accepted Arguments.\n'.format(sys.argv[i]))
+	main()

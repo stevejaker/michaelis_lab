@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+
+import sys, os
+from subprocess import call
+
+ATOMS = {'H' : "1",
+        'He' :"2" ,
+        'Li' :"3" ,
+        'Be' :"4" ,
+        'B' : "5",
+        'C' : "6",
+        'N' : "7",
+        'O' : "8",
+        'F' : "9",
+        'Ne' :"10" ,
+        'Na' :"11" ,
+        'Mg' :"12" ,
+        'Al' :"13" ,
+        'Si' :"14" ,
+        'P' : "15",
+        'S' : "16",
+        'Cl' :"17" ,
+        'Ar' :"18" ,
+        'K' : "19",
+        'Ca' :"20" ,
+        'Sc' :"21" ,
+        'Ti' :"22" ,
+        'V' : "23",
+        'Cr' :"24" ,
+        'Mn' :"25" ,
+        'Fe' :"26" ,
+        'Co' :"27" ,
+        'Ni' :"28" ,
+        'Cu' :"29" ,
+        'Zn' :"30" ,
+        'Ga' :"31" ,
+        'Ge' :"32" ,
+        'As' :"33" ,
+        'Se' :"34" ,
+        'Br' :"35" }
+
+def showUsage():
+    print('''
+For Help:
+    -h,  --help                     Displays this Message
+    -S,  --basis_info               Displays Basis Set Options
+
+Arguments:
+    -c,  --coord                    Coordinate File             (String, Default 'coords.xyz)
+    -l,  --logfile                  Log File Name               (String, Default 'gamess_out.log')
+    -nc, --charge                   Net Charge                  (Integer, Default 0)
+    -m,  --mult                     Multiplicity                (Integer, No Default)
+    -b,  --basis                    Basis Set                   (String, Default 'PM3')
+    -r,  --run_type                 Run Type [NOT ACTIVE]       (String, No Default)
+    -nv, --nonvdw                   NonVDW Atoms                (String [Comma Separated List], No Default)
+    -if, --ifzmat                   Ifzmat Atoms                (String [Comma Separated List], No Default)
+    -f,  --fvalue                   Fvalue                      (Integer in Angstroms, No Default)
+    -n,  --nstep                    Nstep Value                 (Integer, Default 50)
+    -op, --opttol                   Optimization Gradient       (Float, Defalut 0.0005)
+    -z,  --nzvar                    Nzvar                       (Integer, Default 1)
+    -mn, --minsteps                 Nstep for Initial Geo Opt   (Default minsteps = nstep)
+
+Optional Modifiers (MUST BE INCLUDED AFTER THE ABOVE ARGUMENTS):
+    -O,  --open                     Indicates an Open Valence   (True if included, Otherwise False)
+         --full                     Full Basis Set              (Integer from 1-9, indicates basis set selection)
+         --nocheck                  Does Request Confirmation   (True if included, Otherwise False)
+
+NOTE: If an argument is omitted and there is no default, the user will be prompted for their input.''')
+
+
+def fullyMinimizeGeometry():
+    with open(geo_input,'w') as f:
+        f.write("""! Input file created for Gamess by transition_state.py
+ $BASIS GBASIS={} $END
+ $CONTRL {}RUNTYP=OPTIMIZE ICHARG={} MULT={} MAXIT=200 $END
+ $STATPT OPTTOL={} NSTEP={} $END
+ $ZMAT dlc=.t. auto=.t. nonvdw(1)={} $END
+ $ZMAT ifzmat(1)={} fvalue(1)={} $END
+ $SYSTEM MWORDS=200 $END
+ $DATA 
+Title
+C1
+""".format(gbasis, scftype, net_charge, multiplicity, opttol, minsteps, nonvdw, ifzmat, fvalue))
+        for i in input_coords:
+            f.write(i + '\n')
+        f.write(' $END')
+
+
+def vibrInputFile():
+    with open(vibr_input,'w') as f:
+        f.write("""! Input file created for Gamess by transition_state.py
+ $BASIS GBASIS={} $END
+ $CONTRL {}RUNTYP=OPTIMIZE ICHARG={} MULT={} MAXIT=200 $END
+ $SCF DAMP=.t. EXTRAP=.t. SOSCF=.f. DIIS=.t. $END
+ $CONTRL nzvar={} $END
+ $STATPT OPTTOL={} NSTEP={} hssend=.t. $END
+ $FORCE nvib=2 $END
+ $ZMAT dlc=.t. auto=.t. nonvdw(1)={} $END
+ $ZMAT ifzmat(1)={} fvalue(1)={} $END
+ $SYSTEM MWORDS=200 $END
+ $DATA 
+Title
+C1
+""".format(gbasis, scftype, net_charge, multiplicity, nzvar, opttol, (int(nstep)*20), nonvdw, ifzmat, fvalue))
+        for i in input_coords:
+            f.write(i + '\n')
+        f.write(' $END')
+
+def showBasisSetOptions():
+        print('\nOptions:\n\t1. STO-3G')
+        print('\t2. MINI')
+        print('\t3. 3-21G')
+        print('\t4. 6-31G(d)')
+        print('\t5. 6-31G(d,p)')
+        print('\t6. 6-31G+(d,p)')
+        print('\t7. 6-31G+(2d,p)')
+        print('\t8. 6-311G++(2d,p)')
+        print('\t9. Core Potential\n')
+
+def finalInputFile():
+    data = readFile(dat_file)
+    hess = getHess(data)
+    with open('final_input.inp','w') as f:
+        f.write("""! Input file created for Gamess by transition_state.py
+ $BASIS GBASIS={} $END
+ $CONTRL {}RUNTYP=SADPOINT ICHARG={} MULT={} MAXIT=200 $END
+ $CONTRL nzvar={} $END
+ $STATPT OPTTOL={} NSTEP={} $END
+ $STATPT hess=read ihrep=5 hssend=.t. $END
+ $FORCE nvib=2 $END
+ $ZMAT dlc=.t. auto=.t. nonvdw(1)={} $END
+ $SYSTEM MWORDS=200 $END
+ $DATA 
+Title
+C1
+""".format(gbasis, scftype, net_charge, multiplicity, nzvar, opttol, nstep, nonvdw))
+        for i in coord_list:
+            f.write(i + '\n')
+        f.write(' $END\n $HESS\n')
+        for i in hess:
+            f.write(i + '\n')
+        f.write(' $END')
+
+def getCoords():
+    input_coords = []
+    coords = readFile(coord_file)
+    del coords[0]
+    coords = [i for i in coords if i != '']
+    for i in coords:
+        atom = i[0:2].strip()
+        i = i.split()
+        try:
+            i = "{:<4}  {:<4}  {:>13}  {:>13}  {:>13}".format(atom, str(float(ATOMS[atom])), i[1], i[2], i[3])
+            input_coords.append(i)
+        except: pass
+    return input_coords
+
+def readFile(fn):
+    out = []
+    with open(fn,'r') as f:
+        f = f.readlines()
+        for l in f:
+            l = l.replace('\n','')
+            if fn in dat_file_list or 'log' in fn:
+                out.append(l)
+            else:
+                out.append(l.strip())
+    return out #Turns the file into a list
+
+def continuePrinting(file, l, print_list, stop):
+    counter = 0
+    while file[l].strip() != stop:
+        print_list.append(file[l])
+        counter += 1
+        l += 1
+    return l, print_list, 'DONE'
+
+def getHess(file):
+    hess_list = []
+    for l in range(len(file)):
+        if file[l].strip() == '$HESS':
+            l += 1
+            l, hess, status = continuePrinting(file, l, [], '$END')
+            hess_list.append(hess)
+        else:
+            l += 1
+    return hess_list[-1]
+
+def getNewGeometry(file):
+    coord_list = []
+    for l in range(len(file)):
+        if file[l].strip() == '***** EQUILIBRIUM GEOMETRY LOCATED *****':
+            print('EQUILIBRIUM GEOMETRY LOCATED')
+            l += 4
+            l, coord_list, status = continuePrinting(file, l, coord_list, '')
+            if status == 'DONE':
+                return coord_list
+        else:
+            l += 1
+    return coord_list
+
+def deleteFiles(key):
+    scratch_dir='/tmp/'
+    for i in os.listdir(scratch_dir):
+        if key in i:
+            os.remove(os.path.join(scratch_dir, i))
+
+
+def writeEquilibriumCoordinates(outfile):
+    with open('equilibrium_coordinates.xyz','w') as f:
+        f.write(str(len(outfile))+'\n\n')
+        for i in outfile:
+            i = i.split()
+            i = "{:<8}  {:>13}  {:>13}  {:>13}".format(i[0].title(),i[2],i[3],i[4])
+            f.write(i+'\n')
+            print(i)
+    print('END OF GEOMETRY')
+    print('Wrote File: equilibrium_coordinates.xyz')
+
+def getEnergy(fn):
+    file = readFile(fn)
+    for i in range(len(file)):
+        if file[i] == "              E         H         G         CV        CP        S":
+            print(border)
+            for j in range(7):
+                if j == 0:
+                    print("|  {}    |".format(file[i+j]))
+                    print(border)
+                else:
+                    print("|  {}  |".format(file[i+j]))
+    print(border)
+
+def getBasisSetInfo(gbasis,sel):
+    if sel == '':
+        try:
+            sel = int(input('\nWhat is the full basis set?\n1. STO-3G\n2. MINI\n3. 3-21G\n4. 6-31G(d)\n5. 6-31G(d,p)\n6. 6-31G+(d,p)\n7. 6-31G+(2d,p)\n8. 6-311G++(2d,p)\n9. Core Potential\n\n>> '))
+        except:
+            print('Invalid Basis Set Input\nExiting Program...')
+            sys.exit()
+    if gbasis =='B3LYP':
+        scfmod = 'DFTTYP=B3LYP '
+    elif gbasis =='MP2':
+        scfmod = 'MPLEVL=2 '
+    elif gbasis =='CCSD(T)':
+        scfmod = 'CCTYP=CCSD(T) '
+    else:
+        scfmod=''
+    if sel == 1:
+        basis_set = gbasis + ' STO-3G'
+        gbasis = 'STO NGAUSS=3'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 2:
+        basis_set = gbasis + ' MINI'
+        gbasis = 'MINI'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 3:
+        basis_set = gbasis + ' 3-21G'
+        gbasis = 'N21 NGAUSS=3'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 4:
+        basis_set = gbasis + ' 6-31G(d)'
+        gbasis = 'N31 NGAUSS=6 NDFUNC=1'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 5:
+        basis_set = gbasis + ' 6-31G(d,p)'
+        gbasis = 'N31 NGAUSS=6 NDFUNC=1 NPFUNC=1'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 6:
+        basis_set = gbasis + ' 6-31G+(d,p)'
+        gbasis = 'N31 NGAUSS=6 NDFUNC=1 NPFUNC=1 DIFFSP=.TRUE.'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 7:
+        basis_set = gbasis + ' 6-31G+(2d,p)'
+        gbasis = 'N31 NGAUSS=6 NDFUNC=2 NPFUNC=1 DIFFSP=.TRUE.'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 8:
+        basis_set = gbasis + ' 6-311G++(2d,p)'
+        gbasis = 'N311 NGAUSS=6 NDFUNC=1 NPFUNC=1 DIFFSP=.TRUE. DIFFS=.TRUE.'
+        scftype = 'SCFTYP=RHF {}'.format(scfmod)
+    elif sel == 9:
+        basis_set = gbasis + ' Core Potential'
+        gbasis = 'SBK NGAUSS=3 NDFUNC=1 '
+        if '-O' in sys.argv or '--open' in sys.argv:
+            try:
+                sys.argv.remove('-O')
+            except:
+                sys.argv.remove('--open')
+            scftype = 'SCFTYP=ROHF ECP=SBK '
+        else:
+            scftype = 'SCFTYP=RHF ECP=SBK '
+    else:
+        print('Invalid Basis Set Input\nExiting Program...')
+        sys.exit()
+    return basis_set, gbasis, scftype
+
+
+def catchGamessErrors(fn):
+    file = readFile(fn)
+    if ' ddikick.x: exited gracefully.' not in file:
+        print('ERROR: GAMESS ERROR DETECTED. \nPLEASE REVIEW THE LOG FILE: {}\n\n'.format(fn))
+        sys.exit()
+
+
+
+
+if __name__ == '__main__':
+    border = ' -----------------------------------------------------------------------'
+    geo_title       =        'geometry'
+    geo_input       =        '{}.inp'.format(geo_title)
+    geo_dat_file    =        '{}.dat'.format(geo_title)
+    geo_logfile     =        '{}.log'.format(geo_title)
+    vibr_title      =        'vibr'
+    vibr_input      =        '{}.inp'.format(vibr_title)
+    vibr_dat_file   =        '{}.dat'.format(vibr_title)
+    vibr_logfile    =        '{}.log'.format(vibr_title)
+    final_title     =        'final'
+    final_input     =        '{}.inp'.format(final_title)
+    final_dat_file  =        '{}.dat'.format(final_title)
+    final_logfile   =        '{}.log'.format(final_title)
+    coord_file      =        'coords.xyz'
+    net_charge      =        0
+    multiplicity    =        ''
+    gbasis          =        'PM3'
+    basis_set       =        'PM3'
+    scftype  =        'SCFTYP=RHF '
+    # run_type        =        ''
+    nonvdw          =        ''
+    ifzmat          =        ''
+    fvalue          =        ''
+    nstep           =        50
+    minsteps        =        0
+    opttol          =        0.0005
+    nzvar           =        1
+    no_check        =        False
+    dat_file_list = [geo_dat_file,vibr_dat_file,final_dat_file]
+    if len(sys.argv) == 1:
+        print('No Input Detected')
+        showUsage()
+    for i in range(len(sys.argv)):
+        if i == 0:
+            pass
+        if sys.argv[i] == '-h' or sys.argv[i] == '--help':
+            showUsage()
+            sys.exit()
+        if sys.argv[i] == '-S' or sys.argv[i] == '--basis_info':
+            showBasisSetOptions()
+            sys.exit()
+        elif sys.argv[i] == '-c' or sys.argv[i] == '--coord':
+            coord_file = sys.argv[i+1]
+        elif sys.argv[i] == '-l' or sys.argv[i] == '--logfile':
+            logfile1 = sys.argv[i+1]
+        elif sys.argv[i] == '-nc' or sys.argv[i] == '--charge':
+            net_charge = sys.argv[i+1]
+        elif sys.argv[i] == '-m' or sys.argv[i] == '--mult':
+            multiplicity = sys.argv[i+1]
+        elif sys.argv[i] == '-b' or sys.argv[i] == '--basis':
+            gbasis = sys.argv[i+1]
+            if gbasis == 'AM1' or gbasis == 'PM3':
+                basis_set = gbasis + ''
+                scftype = 'SCFTYP=RHF '
+            else:
+                if '--full' in sys.argv:
+                    sel = int(sys.argv[sys.argv.index('--full')+1])
+                    basis_set, gbasis, scftype = getBasisSetInfo(gbasis,sel)
+                else:
+                    basis_set, gbasis, scftype = getBasisSetInfo(gbasis,'')
+        elif sys.argv[i] == '-r' or sys.argv[i] == '--run_type':
+            run_type = sys.argv[i+1]
+        elif sys.argv[i] == '-nv' or sys.argv[i] == '--nonvdw':
+            nonvdw = sys.argv[i+1]
+        elif sys.argv[i] == '-if' or sys.argv[i] == '--ifzmat':
+            ifzmat = sys.argv[i+1]
+        elif sys.argv[i] == '-f' or sys.argv[i] == '--fvalue':
+            fvalue = sys.argv[i+1]
+        elif sys.argv[i] == '-n' or sys.argv[i] == '--nstep':
+            nstep = sys.argv[i+1]
+        elif sys.argv[i] == '-op' or sys.argv[i] == '--opttol':
+            opttol = sys.argv[i+1]
+        elif sys.argv[i] == '-O' or sys.argv[i] == '--open':
+            scftype = 'SCFTYP=ROHF '
+        elif sys.argv[i] == '-z' or sys.argv[i] == '--nzvar':
+            nzvar = sys.argv[i+1]
+        elif sys.argv[i] == '-mn' or sys.argv[i] == '--minsteps':
+            minsteps = sys.argv[i+1]
+        elif sys.argv[i] == '--nocheck':
+            no_check = True
+    if minsteps == 0:
+        minsteps = nstep
+    if multiplicity == '':
+        multiplicity = int(input('\nNo MULTIPLICITY Parameter was provied. What is the molecule\'s multiplicity?\n>> '))
+    # if run_type == '':
+    #     run_type = input('\nNo RUN TYPE Parameter was provied. What is the run type?\n>> ')
+    if nonvdw == '':
+        nonvdw = input('\nNo NONVDW Parameter was provied. Please provide a comma separated list of nonvdw atoms?\n>> ')
+    if ifzmat == '':
+        ifzmat = input('\nNo IFZMAT Parameter was provied. Please provide a comma separated list of ifzmat atoms?\n>> ')
+    if fvalue == '':
+        fvalue = input('\nNo FVALUE Parameter was provied. What is the distance restriction value (in Angstroms)?\n>> ')
+    print('''
+   _____ _    _ __  __ __  __          _______     __
+  / ____| |  | |  \\/  |  \\/  |   /\\   |  __ \\ \\   / /
+ | (___ | |  | | \\  / | \\  / |  /  \\  | |__) \\ \\_/ / 
+  \\___ \\| |  | | |\\/| | |\\/| | / /\\ \\ |  _  / \\   /  
+  ____) | |__| | |  | | |  | |/ ____ \\| | \\ \\  | |   
+ |_____/ \\____/|_|  |_|_|  |_/_/    \\_\\_|  \\_\\ |_| 
+        ''')
+    # print("\n\t  Log File          =    {}".format(logfile1))
+    print("\n\t  Coordinate File   =    {}".format(coord_file))
+    print("\t  Net Charge        =    {}".format(net_charge))
+    print("\t  Multiplicity      =    {}".format(multiplicity))
+    print("\t  Basis Set         =    {}".format(basis_set))
+    # print("Run Type          =    {}".format(run_type))
+    print("\t  Non VDW Atoms     =    {}".format(nonvdw))
+    print("\t  Ifzmat Atoms      =    {}".format(ifzmat))
+    print("\t  F Value           =    {}  (Angstroms)".format(fvalue))
+    print("\t  Nstep             =    {}".format(nstep))
+    print("\t  Opttol            =    {}".format(opttol))
+    print("\t  Nzvar             =    {}".format(nzvar))
+    if no_check == False:
+        user = input('\nIs This Correct?\n[Yes] >> ')
+        if user.lower() == 'no' or user.lower() == 'n':
+            print('Exiting Program...')
+            sys.exit()
+    else:
+        print('\n')
+
+
+###############################################################
+#               Writing Initial Geo Files
+###############################################################
+    input_coords = getCoords()
+    fullyMinimizeGeometry()
+
+    deleteFiles(geo_title)
+    with open(geo_logfile,'w') as f:
+        call(['rungms',geo_input],stdout=f)
+    catchGamessErrors(geo_logfile)
+    print('\n\nFinished Geo\n\n')
+
+###############################################################
+#               Writing Initial Vibr Files
+###############################################################
+    call(['cp',"/tmp/{}".format(geo_dat_file),'.'])
+    file_list = readFile(geo_logfile)
+    coord_list = getNewGeometry(file_list)
+    vibrInputFile()
+
+###############################################################
+#             Preparing and Submitting Vibr
+###############################################################
+    deleteFiles(vibr_title)
+    with open(vibr_logfile,'w') as f:
+        call(['rungms',vibr_input],stdout=f)
+    catchGamessErrors(vibr_logfile)
+    print('\n\nFinished Vibr\n\n')
+
+###############################################################
+#               Writing Freq Input Files
+###############################################################
+    call(['cp',"/tmp/{}".format(vibr_dat_file),'.'])
+    file_list = readFile(logfile1)
+    coord_list = getNewGeometry(file_list)
+    finalInputFile()
+
+###############################################################
+#             Preparing and Submitting Freq
+###############################################################
+    deleteFiles(final_title)
+    with open(final_logfile,'w') as f:
+        call(['rungms',final_input],stdout=f)
+    catchGamessErrors(final_logfile)
+###############################################################
+#                          FINISHED
+###############################################################
+    print("""
+    ______ _____ _   _ _____  _____ _    _ ______ _____  
+    |  ____|_   _| \\ | |_   _|/ ____| |  | |  ____|  __ \\ 
+    | |__    | | |  \\| | | | | (___ | |__| | |__  | |  | |
+    |  __|   | | | . ` | | |  \\___ \\|  __  |  __| | |  | |
+    | |     _| |_| |\\  |_| |_ ____) | |  | | |____| |__| |
+    |_|    |_____|_| \\_|_____|_____/|_|  |_|______|_____/ 
+                                                       
+""")
+    print(border+"\n| {:^69} |".format("Part 1"))
+    getEnergy(geo_logfile)
+    print(border+"\n| {:^69} |".format("Part 2"))
+    getEnergy(vibr_logfile)
+    print(border+"\n| {:^69} |".format("Part 2"))
+    getEnergy(final_logfile)

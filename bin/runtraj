@@ -1,0 +1,16 @@
+#!/bin/bash
+
+#SBATCH --time=00-16:00         # time (DD-HH:MM)
+#SBATCH --nodes=1 --ntasks-per-node=16
+#SBATCH --mem-per-cpu=6G   # memory per CPU core
+#SBATCH --mail-user=sjaker12@byu.edu   # email address
+#SBATCH --mail-type=FAIL
+#SBATCH --requeue
+# #SBATCH --qos=test
+
+. /etc/profile
+
+loadamber
+
+mpirun -np 16 cpptraj.MPI -i cpptraj_C1_S.in
+#cpptraj.in

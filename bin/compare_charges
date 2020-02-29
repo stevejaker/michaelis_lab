@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+
+"""
+VERSION 1.0
+LAST UPDATED: 7/18/2019
+"""
+import sys
+import numpy as np
+from readFile import readFile
+        
+def compareCharges(glist,blist):
+    new = []
+    ave_list = []
+    x = 0
+    q = '%3s%12s%12s%12s' % ("Atom","    File 1   ","   File 2   "," Difference ")
+    w = "-----------------------------------------"
+    print(w)
+    print(q)
+    print(w)
+    while x < len(glist):
+        g = glist[x]
+        b = blist[x]
+        if  len(g) == 9:
+            if g[8] != 'ROOT':
+                avg = abs(float(g[8])-float(b[8]))
+                ave_list.append(avg)
+                q = '%-3s%12s%12s%12s' % (g[1][0],g[8],b[8],str(avg))
+                print(q)
+        x+=1
+        new.append(g)
+    print("{}\nAverage Difference: {}\n{}\n".format(w,np.mean(ave_list),w))
+    return new
+
+
+if __name__ == '__main__':
+    if len(sys.argv) >= 3:
+        file1 = readFile(sys.argv[1], 2)
+        file2 = readFile(sys.argv[2], 2)
+        compareCharges(file1, file2)
+    else:
+        print('\n\n-----------')
+        print('-  ERROR  -')
+        print('-----------\n')
+        print('There appears to be an issue with the way this file was started. To start correctly, run the as follows:\n\npython compare_charge.py <file #1> <file #2>\n\n')

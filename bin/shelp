@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+
+import os, sys
+
+
+def usage():
+	print("""
+Usage:
+	shelp
+
+Options:
+	-h,  --help 			Shows this message, but do you really need a help message for a help script???
+""")
+
+def main():
+	os.system('clear')
+	print("TeamVP subshell functions:")	
+	
+	print("\nPath Functions")
+	print("\tfcd   -- Path interpreter to remove the 'fish://<user>@<host>:<port>' from paths copied from dolphin.")
+	print("\tscd   -- Path interpreter to change server addresses to local addresses. Changes 'zhome' and 'fslhome'\n\t\tto 'home'. This assumes the directories are otherwise identical")
+	print("\tlcd   -- Path interpreter to change local addresses to server addresses. Changes 'home' to 'zhome'.\n\t\tThis assumes the directories are otherwise identical")
+	print("\tfpwd  -- Path interpreter to change server address to fish address. This essentially runs the pwd\n\t\tcommand with 'fish://<user>@<host>:<port>' prepended to the path.")
+	
+	print("\nDirectory Movement Functions")
+	print("\t..    -- Shortcut for cd .. (Moves back one directory)")
+	print("\t...   -- Shortcut for cd ../../ (Moves back two directories)")
+	print("\t..3   -- Shortcut for cd ../../../ (Moves back three directories)")
+	print("\t..4   -- Shortcut for cd ../../../../ (Moves back four directories)")
+	print("\t..5   -- Shortcut for cd ../../../../../ (Moves back five directories)")
+	print("\t..6   -- Shortcut for cd ../../../../../../ (Moves back six directories)")
+	
+	print("\nBashrc and Control Functions")
+	print("\tsbrc  -- Shortcut to source your ~/.bashrc")
+	print("\tebrc  -- Shortcut to edit your ~/.bashrc")
+	print("\tebrc  -- Shortcut for clear, pwd, ls (Clear screen, then prints path and directory contents)")
+	print("\tcw    -- Shortcut to cat `which filename` Prints the text of the file (no matter it's location) to STDOUT")
+	print("\tnw    -- Shortcut to nw `which filename` Edits the file (no matter it's location)")
+	print("\tsrm   -- Soft Remove. Transfers files to ~/.trash (makes directory if it doesn't exist). This is a\n\t\tsafeguard to prevent accidentally deleting files that you might need. It's recommended to use this\n\t\tin place of rm.")
+	print("\tempty -- Emptys ~/.trash Effectively this is an extension of srm")
+
+	print("\nServerFunctions")
+	print("\tqueue -- Shortcut for squeue -u `whoami` The `job` command is better, but sometimes you need squeue.")
+	print("\tloadamber -- Shortcut to purge server modules and load all necessary modules to run amber (You're welcome)")
+
+	print()
+
+
+if __name__ == '__main__':
+	if '-h' in sys.argv or '--help' in sys.argv:
+		usage()
+		sys.exit()
+	else:
+		main()
+

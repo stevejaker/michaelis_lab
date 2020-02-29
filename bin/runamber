@@ -1,0 +1,244 @@
+#!/bin/bash
+
+# Set the max number of threads to use for programs using OpenMP. Should be <= ppn. Does nothing if the program doesn't use OpenMP.
+export OMP_NUM_THREADS=$SLURM_CPUS_ON_NODE
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+##############################
+#        CONTROL ARGS        #
+##############################
+
+USER=`whoami`
+
+# Modules
+GCC=gcc/7
+MPI=openmpi/3.1
+PYTHON=python/3.6
+AMBER=amber/18
+
+##############################
+
+type module &>/dev/null
+[[ $? -eq 0 ]] || . /etc/profile  # source /etc/profile if `module` isn't defined
+
+module purge
+module load $GCC $MPI $PYTHON $AMBER
+
+##############################
+#         ARGS SETUP         #
+##############################
+
+PIECE=$1 # CMD LINE ARG1
+INPUT=prod.in
+FRCMOD_PATH=/zhome/${USER}/zTeamVPScripts/frcmod_files # suggested path...
+
+LAST_PIECE=`python -c "print($PIECE - 1)"`
+PRMTOP=complex.prmtop # These values should not change
+# CRDFILE IS DEFINED LATER...
+
+##############################
+#         Functions          #
+##############################
+
+function runLeap () {
+	echo "Catalyst: $CATALYST"
+	echo "File Format: $FILE_FORMAT"
+	echo "Solvent Box: $SOLVENTBOX"
+	echo "Solvent Prmtop: $SOLVENT_PRMTOP"
+	echo "Substrate: $SUBSTRATE"
+	echo "Box Size: $BOX"
+	echo ""
+
+	
+	#####################################################################
+	####################### Set up for future use #######################
+	#####################################################################
+	# If the .frcmod files are NOT foud in the current directory OR if 
+	# they are NOT found in the directory where we will be storing the 
+	# better .frcmod files that Sam and Caleb are making, makes a new one
+	if [[ ! -e "${CATALYST}.frcmod" && ! -e "${FRCMOD_PATH}/${CATALYST}.frcmod" ]]; then
+		echo "File: ${CATALYST}.frcmod not found. Running parmchk2"
+		parmchk2 -i $CATALYST.$FILE_FORMAT -f $FILE_FORMAT -o $CATALYST.frcmod
+	fi
+
+	if [[ ! -e "$SUBSTRATE.frcmod" && ! -e "${FRCMOD_PATH}/${SUBSTRATE}.frcmod" ]]; then
+		echo "File: ${SUBSTRATE}.frcmod not found. Running parmchk2"
+		parmchk2 -i $SUBSTRATE.$FILE_FORMAT -f $FILE_FORMAT -o $SUBSTRATE.frcmod
+	fi
+
+	echo "source leaprc.protein.ff14SB
+	source leaprc.gaff2
+	addPath /zhome/${USER}/storage/modified_solutions
+	loadoff solvents.lib
+	loadamberparams ${CATALYST}.frcmod
+	loadamberparams ${SOLVENT_PRMTOP}
+	loadamberparams ${SUBSTRATE}.frcmod
+	loadoff ${SOLVENTBOX}.off
+	peptide = load${FILE_FORMAT} ${CATALYST}.${FILE_FORMAT}
+	sub = load${FILE_FORMAT} ${SUBSTRATE}.${FILE_FORMAT}
+	complex = combine {peptide sub}
+	savemol2 complex complex.mol2 0
+	saveamberparm complex complex1.prmtop complex1.inpcrd
+	solvateBox complex ${SOLVENTBOX} ${BOX} 0.8
+	saveamberparm complex complex.prmtop complex.inpcrd
+	savemol2 complex complex1.mol2 1
+	savemol2 complex complex2.mol2 0
+	quit" > leap_topsol.in
+
+	tleap -f leap_topsol.in
+	rm leap*
+
+	echo ""
+	echo "System is solvated and ready for MD run."
+	echo ""
+}
+
+function runHeat () {
+	echo ""
+	echo "Heating the system..."
+	echo ""
+
+
+	mpirun -np $SLURM_CPUS_ON_NODE pmemd.MPI -O -i heat.in -o heat.out -p complex.prmtop -c complex.inpcrd -c min.rst -r heat.rst -x heat.mdcrd
+}
+
+function runMin () {
+	echo ""
+	echo "Minimizing the system..."
+	echo ""
+
+	mpirun -np $SLURM_CPUS_ON_NODE pmemd.MPI -O -i min.in -o min.out -p complex.prmtop -c complex.inpcrd -r min.rst
+}
+
+function runPress () {
+	echo ""
+	echo "Compressing system"
+	echo ""
+
+	mpirun -np $SLURM_CPUS_ON_NODE pmemd.MPI -O -i press.in -o press.out -p complex.prmtop -c heat.rst -r press.rst -x press.mdcrd
+}
+
+function runProd () {
+	# Standard run sequence for production
+	case `whoami` in
+		"jparkman" | "insert" | "other" | "users" | "here" )
+			echo ""
+		    # cat yoda.txt # Local dir
+		    cat `which yoda.txt` # from misc
+		    echo ""
+		    echo ""
+		    echo "**************************  May The Force Be With You!    *********************"
+		    echo ""
+			;;
+
+	esac
+
+	echo ""
+	echo "Running Production for Piece ${PIECE}"
+	echo ""
+
+	mpirun -np $SLURM_CPUS_ON_NODE pmemd.MPI -O -i $INPUT -o $OUTFILE -p $PRMTOP -c $CRDFILE -r $RST_FILE -x $MDCRD
+}
+
+function analyze () {
+	echo ""
+	echo "Analyzing Results..."
+	echo ""
+
+        sbatch cpp_traj_run_orc.sh
+
+	# bash cpp_traj_run_orc.sh
+}
+
+
+
+export startTime=$(runtime.py)
+echo "Started Run at `date`"
+
+case $PIECE in
+	"1" )
+		# RST_FILES=`ls *.rst | wc -l`
+		# case $RST_FILES in
+		CRDFILE=`getmax *.rst`
+		case $CRDFILE in
+			"-1" )
+				# SETS UP LEAP, MIN, HEAT, PRESS, ETC...
+				echo ""
+				echo "No restart file detected for piece 1. Starting from scratch"
+				echo ""
+
+				CATALYST=$2
+				FILE_FORMAT=$3
+				SOLVENTBOX=$4	# DOES NOT contain .off extension!!!
+				SOLVENT_PRMTOP=$5	# DOES contain .frcmod extension!!!
+				SUBSTRATE=$6
+				BOX=$7
+				
+				OUTFILE=${INPUT::-3}${PIECE}.out
+		        RST_FILE=${INPUT::-3}${PIECE}.rst
+				MDCRD=${INPUT::-3}${PIECE}.mdcrd
+				CRDFILE=press.rst
+
+				runLeap
+				runtime.py -t $startTime -p "Total"
+				stepStart=`runtime.py`
+
+				runMin
+				runtime.py -t $stepStart -p "Step"
+				runtime.py -t $startTime -p "Total"
+				stepStart=`runtime.py`
+
+				runHeat
+				runtime.py -t $stepStart -p "Step"
+				runtime.py -t $startTime -p "Total"
+				stepStart=`runtime.py`
+
+				runPress
+				runtime.py -t $stepStart -p "Step"
+				runtime.py -t $startTime -p "Total"
+				stepStart=`runtime.py`
+
+				runProd
+				runtime.py -t $stepStart -p "Step"
+				;;
+			* )
+				# Runs step1 continuing from a restart file
+				OUTFILE=${INPUT::-3}${PIECE}.out
+				RST_FILE=${INPUT::-3}${PIECE}.rst
+				MDCRD=${INPUT::-3}${PIECE}.mdcrd
+
+				echo ""
+				echo "Restart file detected for piece 1. Using restart file: ${CRDFILE}"
+				echo ""
+				
+				runProd
+				;;
+		esac
+		;;
+	* )
+		# Sets up a normal continuation run
+		OUTFILE=${INPUT::-3}${PIECE}.out
+        RST_FILE=${INPUT::-3}${PIECE}.rst
+        MDCRD=${INPUT::-3}${PIECE}.mdcrd
+        CRDFILE=${INPUT::-3}${LAST_PIECE}.rst
+		runProd
+		case $2 in
+			-L | -l )
+				runtime.py -t $startTime -p "Total"
+				stepStart=`runtime.py`
+				
+				analyze
+				runtime.py -t $stepStart -p "Step"
+				;;
+			* )
+				true
+				;;
+		esac
+		;;
+esac
+
+echo ""
+echo "Completely Finished at `date`"
+runtime.py -t $startTime -p "Total"
+echo ""

@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+
+import os, sys
+from shutil import copy, copytree, rmtree
+from getpass import getuser
+from subprocess import call, check_output
+import bashcall
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+xlabel = None
+ylabel = None
+plotfile = None
+additional_details = ''
+tempfile = 'tempfile'
+
+
+def usage():
+	print("""
+Usage:
+	plot [options]
+
+Options:
+	-h,  --help 			Shows this message	
+	-x,  --xlabel 			Labels the X Axis
+	-y,  --ylabel 			Labels the Y Axis
+	-f,  --file 			Labels the file to plot
+	-l,  --lines 			Turns lines on
+
+Example:
+	plot -x Time -y Energy -f plotfile -a withlines
+""")
+
+def makeInputFile(filename):
+	with open(filename, 'w') as f:
+		f.write(f"""set xlabel '{xlabel}'
+set ylabel '{ylabel}'
+set title 'Graph of: {plotfile}'
+plot "{plotfile}" {additional_details}
+""")
+
+def getAdditionalDetails():
+	global additional_details
+	
+	if lines:
+		additional_details = 
+	return additional_details
+
+def main():
+	additional_details = getAdditionalDetails()
+	makeInputFile(tempfile, additional_details)
+	bashcall.listCall([f'gnuplot --persist < {tempfile}'])
+	os.remove(tempfile)
+	print("Done!")
+	
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+		elif ARG in ['-x', '--xlabel']:
+			xlabel = ARGS[i + 1]
+		elif ARG in ['-y', '--ylabel']:
+			ylabel = ARGS[i + 1]
+		elif ARG in ['-f', '--file']:
+			plotfile = ARGS[i + 1]
+		elif ARG in ['-l`', '--lines']:
+			lines = True
+	
+	if plotfile is not None:
+		main()
+	else:
+		print("Plotfile is not defined. Cannot run `plot`")
+		sys.exit()
+

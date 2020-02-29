@@ -1,0 +1,171 @@
+#!/bin/sh
+case $0 in
+	"-h" | --help )
+		echo "
+Important Information:
+	1. The Catalyst must have all the residues named ALN. This was initially a temporary fix; however, I ran out of time to fix it
+	2. All Substrate residues must be named UNL. Again, a temporary fix... 
+
+If you'd like to fix this, it's located in ~/zTeamVPScripts/Scripts/correct.py.
+"
+		;;
+esac
+
+echo ""
+echo "What is the Catalyst? (Do not include .mol2 extention)"
+read PEP
+echo ""
+
+echo "What is the Larger Substrate? (Do not include .mol2 extention)"
+read SUB1
+echo ""
+
+echo "How many molecules of ${SUB1} will be in the reaction?"
+read sub1
+echo ""
+
+echo "What is the Smaller Substrate? (Do not include .mol2 extention)"
+read SUB2
+echo ""
+
+echo "How many molecules of ${SUB2} will be in the reaction?"
+read sub2
+echo ""
+
+echo "What is the box size? (Angstroms)"
+read box
+echo ""
+
+cat << EOF > leap1.in
+
+PEP = loadmol2 $PEP.mol2
+SS1 = loadmol2 $SUB1.mol2
+SS2 = loadmol2 $SUB2.mol2
+
+saveoff PEP $PEP.off
+saveoff SS1 $SUB1.off
+saveoff SS2 $SUB2.off
+
+savepdb PEP $PEP.pdb
+savepdb SS1 $SUB1.pdb
+savepdb SS2 $SUB2.pdb
+quit
+EOF
+
+tleap -f leap1.in
+
+box_pos=`python -c "print(int(${box}/2)+3)"`
+box_neg=`python -c "print(int(${box_pos}*-1)+3)"`
+
+
+# echo $sub1
+# echo $sub2
+# echo $box_pos
+# echo $box_neg
+
+if [[ ! -e "${PEP}.frcmod" && ! -e "catalyst.frcmod" ]]; then
+	echo "Frcmod file not found for the catalyst. Running parmchk2"
+	parmchk2 -i ${PEP}.mol2 -f mol2 -o catalyst.frcmod	
+elif [[ -e "${PEP}.frcmod" ]]; then
+	echo "Frcmod file found for the catalyst. Renaming to 'catalyst.frcmod'"
+	mv ${PEP}.frcmod catalyst.frcmod
+else
+	echo "Frcmod file 'catalyst.frcmod' found."
+fi
+
+if [[ ! -e "${SUB1}.frcmod" && ! -e "sub1.frcmod" ]]; then
+	echo "Frcmod file not found for substrate 1. Running parmchk2"
+	parmchk2 -i ${SUB1}.mol2 -f mol2 -o sub1.frcmod
+elif [[ -e "${SUB1}.frcmod" ]]; then
+	echo "Frcmod file found for substrate 1. Renaming to 'sub1.frcmod'"
+	mv ${SUB1}.frcmod sub1.frcmod
+else
+	echo "Frcmod file 'sub2.frcmod' found."
+fi
+
+if [[ ! -e "${SUB2}.frcmod" && ! -e "sub2.frcmod" ]]; then
+	echo "Frcmod file not found for substrate 2. Running parmchk2"
+	parmchk2 -i ${SUB2}.mol2 -f mol2 -o sub2.frcmod
+elif [[ -e "${SUB2}.frcmod" ]]; then
+	echo "Frcmod file found for substrate 2. Renaming to 'sub2.frcmod'"
+	mv ${SUB2}.frcmod sub2.frcmod
+else
+	echo "Frcmod file 'sub2.frcmod' found."
+fi
+
+echo "
+
+tolerance 1.5
+
+# The type of the files will be pdb 
+
+filetype pdb
+
+# The name of the output file
+
+output 2_subs.pdb
+
+# The protein will be fixed with its center of mass at center of the
+# box, and no rotation (the first three zeros correspond to the position
+# of the center of mass and the last three correspond to the euler
+# angles of rotation, in radian, relative to the position in the input
+# file). 
+
+structure $PEP.pdb
+  number 1 
+  fixed 0. 0. 0. 0. 0. 0.
+  centerofmass
+end structure
+
+structure $SUB1.pdb 
+  number $sub1
+  inside box ${box_neg}. ${box_neg}. ${box_neg}. ${box_pos}. ${box_pos}. ${box_pos}.
+  radius 1.5
+end structure
+
+structure $SUB2.pdb 
+  number $sub2
+  inside box ${box_neg}. ${box_neg}. ${box_neg}. ${box_pos}. ${box_pos}. ${box_pos}. 
+  radius 1.5
+end structure
+" > input.inp
+
+packmol < input.inp
+python ~/zTeamVPScripts/Scripts/correct.py 2_subs.pdb PEP SS1 SS2
+
+DIR=leap_outputs_${sub1}_${sub2}_${box}
+mkdir $DIR
+rm leap_topsol.in
+
+echo "
+source leaprc.gaff2
+
+loadamberparams catalyst.frcmod
+loadamberparams sub1.frcmod
+loadamberparams sub2.frcmod
+
+loadoff $PEP.off
+loadoff $SUB1.off
+loadoff $SUB2.off
+
+complex = loadpdb 2_subs.pdb
+
+saveamberparm complex complex.prmtop complex.inpcrd
+savemol2 complex complex.mol2 1
+saveoff complex complex.off
+
+quit" > leap_topsol.in
+
+tleap -f leap_topsol.in
+
+mv complex* ./${DIR}/
+mv *.frcmod ./${DIR}/
+
+rm *.pdb
+rm *.off
+rm *.in*
+rm *.log
+echo "Removed all PDB and OFF intermediate files. Your final files are in the folder ${DIR}"
+
+echo "Done $i"
+#done

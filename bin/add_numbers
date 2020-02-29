@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+
+"""
+VERSION 1.0
+LAST UPDATED: 4/1/2019
+
+This script re-names the atoms in a mol2 file
+"""
+
+import sys
+from readFile import readFile
+
+def correctAtomsMOL2(mylist):
+    new = []
+    x = 0
+    new_atom = ''
+    hcount = 0
+    ncount = 0
+    ccount = 0
+    ocount = 0
+    scount = 0
+    fcount = 0
+    while x < len(mylist):
+        g = mylist[x]
+        if  len(g) == 10:
+            del g[-1]
+        if len(g) == 9 and g[-1] != 'ROOT':
+            atom = str(g[1]).replace('\\d','')
+            atom = atom[0]
+            print(atom)
+            if atom.lower() == 'h':
+                if hcount == 0:
+                    new_atom = "H"
+                else:
+                    new_atom = "H{}".format(hcount)
+                hcount += 1
+            elif atom.lower() == 'n':
+                if ncount == 0:
+                    new_atom = "N"
+                else:
+                    new_atom = "N{}".format(ncount)
+                    ncount += 1
+            elif atom.lower() == 'o':
+                if ocount == 0:
+                    new_atom = "O"
+                else:
+                    new_atom = "O{}".format(ocount)
+                ocount += 1
+            elif atom.lower() == 'c':
+                if ccount == 0:
+                    new_atom = "C"
+                else:
+                    new_atom = "C{}".format(ccount)
+                ccount += 1
+            elif atom.lower() == 's':
+                if scount == 0:
+                    new_atom = "S"
+                else:
+                    new_atom = "S{}".format(scount)
+                scount += 1
+            elif atom.lower() == 'f':
+                if fcount == 0:
+                    new_atom = "F"
+                else:
+                    new_atom = "F{}".format(fcount)
+                fcount += 1
+            g[1] = new_atom
+            #print(g)
+        x+=1
+        new.append(g)
+    return new
+
+def correctAtomsPDB(mylist):
+    new = []
+    x = 0
+    new_atom = ''
+    hcount = 0
+    ncount = 0
+    ccount = 0
+    ocount = 0
+    scount = 0
+    fcount = 0
+    while x < len(mylist):
+        g = mylist[x]
+        if  len(g) > 10:
+            atom = str(g[2]).replace('\\d','')
+            atom = atom[0]
+            print(atom)
+            if atom.lower() == 'h':
+                if hcount == 0:
+                    new_atom = "H"
+                else:
+                    new_atom = "H{}".format(hcount)
+                hcount += 1
+            elif atom.lower() == 'n':
+                if ncount == 0:
+                    new_atom = "N"
+                else:
+                    new_atom = "N{}".format(ncount)
+                    ncount += 1
+            elif atom.lower() == 'o':
+                if ocount == 0:
+                    new_atom = "O"
+                else:
+                    new_atom = "O{}".format(ocount)
+                ocount += 1
+            elif atom.lower() == 'c':
+                if ccount == 0:
+                    new_atom = "C"
+                else:
+                    new_atom = "C{}".format(ccount)
+                ccount += 1
+            elif atom.lower() == 's':
+                if scount == 0:
+                    new_atom = "S"
+                else:
+                    new_atom = "S{}".format(scount)
+                scount += 1
+            elif atom.lower() == 'f':
+                if fcount == 0:
+                    new_atom = "F"
+                else:
+                    new_atom = "F{}".format(fcount)
+                fcount += 1
+            g[2] = new_atom
+            #print(g)
+        x+=1
+        new.append(g)
+    return new
+
+def writeMOL2File(f,fn):
+    with open(fn,'w') as a:
+        for l in f:
+            if len(l) == 9:
+                x = '%3s  %-4s%11s%11s%11s  %-5s%s%8s%11s'% (l[0],l[1],l[2],l[3],l[4],l[5],l[6],l[7],l[8])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 4:
+                x = '%5s%5s%5s%5s' % (l[0],l[1],l[2],l[3])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 4:
+                x = '%s%4s%4s%4s%4s' % (l[0],l[1],l[2],l[3],l[4])
+                a.write(x)
+                a.write('\n')
+            else:
+                a.write('\t'.join(l))
+                a.write('\n')
+
+def writePDBFile(f,fn):
+    with open(fn,'w') as a:
+        for l in f:
+            if len(l) == 11 or len(l) == 12:
+                x = '%s%5s%5s%5s%4s%5s%8s%10s%10s%8s%8s%5s'% (l[0],l[1],l[2],l[3],l[4],l[5],l[6],l[7],l[8],l[9],l[10],l[11])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 6:
+                x = '%s%5s%5s%5s%5s%5s' % (l[0],l[1],l[2],l[3],l[4],l[5])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 5:
+                x = '%s%5s%5s%5s%5s' % (l[0],l[1],l[2],l[3],l[4])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 4:
+                x = '%s%5s%5s%5s' % (l[0],l[1],l[2],l[3])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 3:
+                x = '%s%5s%5s' % (l[0],l[1],l[2])
+                a.write(x)
+                a.write('\n')
+            else:
+                a.write('   '.join(l))
+                a.write('\n')
+
+if len(sys.argv) != 1:
+    file = sys.argv[1]
+    name,ext = file.split('.')
+    output = '{}-out.{}'.format(name,ext)
+    file = readFile(file, 2)
+    if ext == 'mol2':
+        corrected_file = correctAtomsMOL2(file)
+        writeMOL2File(corrected_file, output)
+    elif ext == 'pdb':
+        corrected_file = correctAtomsPDB(file)
+        writePDBFile(corrected_file, output)
+    print('\nFinished.\nNew File saved as: {}\n'.format(output))
+else:
+    print('\n\n-----------')
+    print('-  ERROR  -')
+    print('-----------\n')
+    print('There appears to be an issue with the way this file was started. To start correctly, run as follows:\n\npython add_numbers.py {Input File Name}\n\n')
+
+
+

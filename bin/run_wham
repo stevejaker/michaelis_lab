@@ -1,0 +1,27 @@
+#!/bin/sh
+
+export PATH=$PATH:/usr/local/wham/wham
+
+binNumber=$(ls -dq *distance*.dat* | wc -l)
+echo ""
+echo "What is the min distance? (A)"
+read minDistance
+echo ""
+echo "what is the max distance (A)"
+read maxDistance
+echo ""
+echo "What temperature? (K)"
+read Temperature
+echo ""
+
+
+whamInput="$minDistance $maxDistance $binNumber 0.01 $Temperature 0 summary.dat result.dat"
+
+echo "This is the Wham Input: $whamInput"
+
+wham $whamInput
+
+cat result.dat | awk '{print$1,$2}' > pmf.dat
+sed -i '/inf/d' pmf.dat
+xmgrace pmf.dat
+echo "Done"

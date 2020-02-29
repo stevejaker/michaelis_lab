@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+
+"""
+VERSION 1.0
+LAST UPDATED: 7/18/2019
+This script transfers the charges from one mol2 file to another one.
+"""
+
+import sys
+from readFile import readFile
+
+
+def addCharge(glist,blist):
+    new = []
+    x = 0
+    while x < len(glist):
+        g = glist[x]
+        b = blist[x]
+        if len(g) == 10:
+            del g[-1]
+        if  len(g) == 9:
+            del g[-1]
+            g.append(b[8])
+        x+=1
+        new.append(g)
+    return new
+
+def writeFile(f,fn):
+    with open(fn,'w') as a:
+        for l in f:
+            if len(l) == 9:
+                x = '%7s%6s%11s%11s%11s  %-9s%s%8s%11s'% (l[0],l[1],l[2],l[3],l[4],l[5],l[6],l[7],l[8])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 4:
+                x = '%5s%5s%5s%5s' % (l[0],l[1],l[2],l[3])
+                a.write(x)
+                a.write('\n')
+            elif len(l) == 4:
+                x = '%s%4s%4s%4s%4s' % (l[0],l[1],l[2],l[3],l[4])
+                a.write(x)
+                a.write('\n')
+            else:
+                a.write('   '.join(l))
+                a.write('\n')
+
+if len(sys.argv) >= 3:
+    file1 = sys.argv[1]
+    file2 = sys.argv[2]
+    name, ext = file1.split('.')
+    output = '{}-out.{}'.format(name, ext)
+    coord_file = readFile(file1, 2)
+    charge_file = readFile(file2, 2)
+    outfile = addCharge(coord_file, charge_file)
+    writeFile(outfile, output)
+    print('\nFinished.\nNew File saved as: {}\n'.format(output))
+else:
+    print('\n\n-----------')
+    print('-  ERROR  -')
+    print('-----------\n')
+    print('There appears to be an issue with the way this file was started. To start correctly, run the as follows:\n\npython add_charges.py <File with Correct Coordinates> <File with Correct Charges>\n')
+    print('Charges will be placed on the FIRST FILE')
+
+
+
+

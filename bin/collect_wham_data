@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+
+
+import os, sys
+from getpass import getuser
+from subprocess import call, check_output
+from shutil import copytree, copy
+import bashcall
+import meta_data_list, run_wham
+
+WORKDIR = os.getcwd()
+WHAMDIR = 'wham_files'
+OVERLAPDIR = 'overlap_all'
+ARGS = sys.argv[1:]
+SHOW_OVERLAP = False
+temperature = 0
+
+def usage():
+	print('''
+Usage:
+	collect_wham_data [temperature argument] [options]
+
+Mandatory Arguments:
+	-T,  --temperature  	Sets Reaction Temeprature (Needed for run_wham.py)
+
+Options:
+	-h,  --help 			Shows this message
+	-o,  --overlap 			Sets SHOW_OVERLAP to True -- Displays Overlap
+''')
+
+def copyFiles():
+	try: os.mkdir(WHAMDIR)
+	except: pass
+	for i in os.listdir():
+		if i.endswith('.dat') and 'distance' in i:
+			copy(i, f'{WORKDIR}/{WHAMDIR}/')
+	copy('force_logfile', f'{WORKDIR}/{WHAMDIR}/')
+	copy('ums_input', f'{WORKDIR}/{WHAMDIR}/')
+	print(f'\nCopied all data Files to {WHAMDIR}\n')
+
+def compileDataFiles():
+	os.chdir(WHAMDIR)
+	try: os.mkdir(OVERLAPDIR)
+	except: pass
+	bashcall.strCall('chmod -R 777 overlap_all')
+	with open('all.dat', 'w') as F:
+		for i in os.listdir():
+			if i.endswith('.dat'):
+				with open(i) as f:
+					f = f.read()
+					F.write(f)
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+
+		elif ARG in ['-o', '--overlap']:
+			SHOW_OVERLAP = True
+
+		elif ARG in ['-T', '--temperature']:
+			temperature = ARGS[i + 1]
+
+	copyFiles()
+	compileDataFiles()
+
+	if temperature == 0:
+		print('ERROR!')
+		print('No Temperature Declared! This is needed for this script to function!!!')
+		sys.exit()
+	
+	if SHOW_OVERLAP:
+		import histogram_overlap
+		histogram_overlap.main()
+
+	run_wham.manualRun(0, 0, 0, temperature, GETDATA=True)
+	print('Finished Running Wham')

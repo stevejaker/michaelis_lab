@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+
+"""
+VERSION 1.0
+LAST UPDATED: 7/18/2019
+"""
+import sys
+from readFile import readFile
+
+def getRESPCharges(glist):
+    new = []
+    x = 0
+    while x < len(glist):
+        g = glist[x]
+        if  len(g) == 4:
+            if g[0] == 'RESP':
+                new.append(g)
+        x+=1
+    return new
+
+def writeFile(f,fn):
+    with open(fn,'w') as a:
+        for l in f:
+            a.write('   '.join(l))
+            a.write('\n')
+
+
+if __name__ == '__main__':
+    file = readFile('out.log', 2)
+    resp_charges = getRESPCharges(file)
+    writeFile(resp_charges, 'resp.txt')
+    print('\nFinished.\nNew File saved as: resp.txt\n')

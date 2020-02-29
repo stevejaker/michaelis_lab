@@ -1,0 +1,21 @@
+#!/bin/bash
+
+######################################################
+# Script: sbatch_submit.sh -- submits all array jobs # 
+######################################################
+
+#ASSUMING THE FOLDERS HAVE THE PATTERN 100ns_* ...
+
+for dir in */; do 		# Iterates through all directories in the folder
+
+	cd $dir
+
+	echo $a
+
+	sbatch ${dir::-1}_array.sh $@
+
+	cd .. 
+	
+done
+
+

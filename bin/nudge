@@ -1,0 +1,959 @@
+#!/usr/bin/env python3
+
+import sys, os
+from subprocess import check_output, call
+from getpass import getuser
+from shutil import rmtree, copyfile
+import math
+import solvateMolecule, frcmod, leap, inpcrd
+import error_handler as EH
+
+workdir = os.getcwd()
+user = getuser()
+
+def usage():
+	print("""
+Usage:
+	-i,  --input 			Declares alternate name for input file (Default: nudge.in)
+	-sf, --start			Declares the file containing the starting frame
+	-ef, --end			Declares the file containing the ending frame
+	-F,  --format			Declares the file format for the starting (Default: mol2)
+	-c,  --copies			Declares the number of copies you want to run (Default: 24)
+	-s,  --solvent 	 		Sets to solvate the molecule using packmol.
+	-S,  --solv_mol 		Sets solvent molecules.
+	-T,  --temp 			Declares heating temperature. The program will attempt to identify the 
+	-q,  --qmmm 			Toggles QMMM
+	-N,  --no_solvent 		Runs Nudge without solvent
+	-qa, --qmmm_atoms 		Declares the list of QMMM atoms -- requires QMMM to be on
+	-qc, --charge 			Declares the charge of the QMMM region (Default 0)
+	-mn, --max_nodes		Declares the number of max nodes (Default 4) -- Don't be a jerk...
+	-mc, --max_cores		Declares the number of max cores (Default 24 which is the max on most nodes)
+	-sp, --strict 			Enables Strict Processing (No more than max_nodes nodes will be used)
+							If not enabled, the max nodes allowed will be 10.
+	-DD  --Days 			Declares server runtime (Days)
+	-HH  --Hours 			Declares server runtime (Hours)
+	-MM  --Minutes 		Declares server runtime (Minutes)
+	     --test 			Runs test job (--qos=test and runtime set to 00-01:00)
+					correct temperature if one is not provided. You will be prompted to change
+					this temperature if it is incorrect.
+	     --reset			Deletes files created by this program
+
+""")
+
+def setup():
+	del sys.argv[0]
+	if len(sys.argv) != 0:
+		return sys.argv, True
+	else:
+		return sys.argv, False
+
+def removeFiles():
+	solvateMolecule.removeFiles()
+	for i in os.listdir():
+		if i.endswith('.inpcrd') or i.endswith('.prmtop') or i.endswith('.log') or i.endswith('.in') or i.endswith('.sh') or 'packmol' in i or i.endswith('.frcmod'):
+			try:
+				os.remove(i)
+				print(f'Removed {i}')
+			except:
+				print(f'Cannot remove {i}')
+		
+		elif i in ['heat', 'equilibration', 'anneal', 'cool', 'final_cool']:
+			try:
+				rmtree(i)
+				print(f'Removed {i}/')
+			except:
+				print(f'Cannot remove {i}')
+	print('Done!')
+
+
+def getInputFiles(file_format):
+	start_files = 0
+	end_files = 0
+	for i in os.listdir():
+		if i.endswith(file_format):
+			if 'start' in i:
+				start = i
+				start_files += 1
+			elif 'end' in i:
+				end = i
+				end_files += 1
+	if start_files > 1:
+		print(f'\nThe work directory contains more than one {file_format} file with the name "start" in the title.')
+		print('You can only have one of these files.\n')
+		sys.exit()
+	elif start_files == 0:
+		print(f'\nThe work directory does not contain a {file_format} file with the name "start" in the title.')
+		print('You must have one of these files in the directory or declare the starting file.\n') 
+		sys.exit()
+	elif end_files > 1:
+		print(f'\nThe work directory contains more than one {file_format} file with the name "end" in the title.')
+		print('You can only have one of these files.\n')
+		sys.exit()
+	elif end_files == 0:
+		print(f'\nThe work directory does not contain a {file_format} file with the name "start" in the title.')
+		print('You must have one of these files in the directory or declare the ending file.\n') 
+		sys.exit()
+	else:
+		print('\nAutodetected the following files:')
+		print(f'Start: {start}\nEnd: {end}\n')
+		return start, end
+
+# def writeMinimizationFile():
+
+def writeHeatingFile(filename):
+	global temp, fitmask, rmsmask, QMMM 
+	global qmmm_atoms, qm_charge, solvate
+	global ts_solvent, ts_no_solvent
+	global heat_ts_solvent, heat_ts_no_solvent
+	qm_info = f"""&qmmm
+  iqmatoms={qmmm_atoms},
+  qmcharge={qm_charge},
+  qm_theory='PM3',
+  qmcut=10.0
+ /"""
+	with open(f'{filename}.in','w') as f:
+		f.write(f"""Heating Input
+&cntrl
+   imin = 0, irest = 0,
+   ntc=2, ntf=2,
+   ntpr=500, ntwx=500,
+   ntb = 0, cut = 10.0,
+   nstlim = {heat_ts_solvent if solvate else heat_ts_no_solvent},
+   {"dt = 0.00001" if solvate else "dt = 0.0001"}, ig=-1,
+   ntt = 3, gamma_ln=1000.0,
+   tempi=0.0, temp0={temp},
+   tgtfitmask="{fitmask}",
+   tgtrmsmask="{rmsmask}",
+   ineb = 1,skmin = 10,skmax = 10,
+   nmropt=1, {"ifqnt=1" if QMMM else ""}
+ /
+ {qm_info if QMMM else ""}
+ &wt type='TEMP0', istep1=0,istep2={heat_ts_solvent if solvate else heat_ts_no_solvent},
+    value1=0.0, value2={temp}
+ /
+ &wt type='END'
+ /
+""")
+
+def writeEquilibrationFile(filename):
+	global temp, fitmask, rmsmask, QMMM 
+	global qmmm_atoms, qm_charge, solvate
+	global ts_solvent, ts_no_solvent
+	global equilibration_ts_solvent, equilibration_ts_no_solvent
+	qm_info = f"""&qmmm
+  iqmatoms={qmmm_atoms},
+  qmcharge={qm_charge},
+  qm_theory='PM3',
+  qmcut=10.0
+ /"""
+	with open(f'{filename}.in','w') as f:
+		f.write(f"""Equilibration Input
+ &cntrl
+  imin = 0, irest = 1, ntx=5,
+  ntc=1, ntf=1,
+  ntpr=1000, ntwx=5000,
+  ntb =  0, cut = 10.0,
+  nstlim = {equilibration_ts_solvent if solvate else equilibration_ts_no_solvent},
+  {"dt = 0.00001" if solvate else "dt = 0.0001"},
+  ntt = 3, gamma_ln=1000.0,
+  temp0={temp},
+  ineb = 1,skmin = 50,skmax = 50
+  tgtfitmask="{fitmask}",
+  tgtrmsmask="{rmsmask}",
+  ig=-1, {"ifqnt=1" if QMMM else ""}
+ /
+ {qm_info if QMMM else ""}
+""")
+
+def writeCoolingFile(filename):
+	global temp, fitmask, rmsmask, QMMM 
+	global qmmm_atoms, qm_charge, solvate
+	global ts_solvent, ts_no_solvent
+	global cool1_ts_solvent, cool1_ts_no_solvent
+	qm_info = f"""&qmmm
+  iqmatoms={qmmm_atoms},
+  qmcharge={qm_charge},
+  qm_theory='PM3',
+  qmcut=10.0
+ /"""
+	temp_change = math.floor(temp / 6)
+	with open(f'{filename}.in','w') as f:
+		f.write(f"""Slow Cooling Input #1
+ &cntrl
+  imin = 0, irest = 1, ntx=5,
+  ntc=1, ntf=1,
+  ntpr=500, ntwx=10000,
+  ntb =  0, cut = 10.0,
+  nstlim = {cool1_ts_solvent if solvate else cool1_ts_no_solvent},
+  {"dt = 0.00001" if solvate else "dt = 0.0001"},
+  ntt = 3, gamma_ln=1000.0,
+  temp0={temp},
+  ineb = 1,skmin = 50,skmax = 50,
+  tgtfitmask="{fitmask}",
+  tgtrmsmask="{rmsmask}",
+  nmropt=1,ig=-1, {"ifqnt=1" if QMMM else ""}
+ /
+ {qm_info if QMMM else ""}
+ &wt type='TEMP0', istep1=0,istep2={cool1_ts_solvent//12 if solvate else cool1_ts_no_solvent//10},
+   value1={temp}, value2={round(temp - temp_change,2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent//12 + 1 if solvate else cool1_ts_no_solvent//12 + 1},istep2={cool1_ts_solvent // 12 * 2 if solvate else cool1_ts_no_solvent // 12 * 2},
+   value1={round(temp - temp_change, 2)}, value2={round(temp - temp_change, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 2 + 1 if solvate else cool1_ts_no_solvent // 12 * 2 + 1},istep2={cool1_ts_solvent // 12 * 3 if solvate else cool1_ts_no_solvent // 12 * 3},
+   value1={round(temp - temp_change, 2)}, value2={round(temp - temp_change * 2, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 3 + 1 if solvate else cool1_ts_no_solvent // 12 * 3 + 1},istep2={cool1_ts_solvent // 12 * 4 if solvate else cool1_ts_no_solvent // 12 * 4},
+   value1={round(temp - temp_change * 2, 2)}, value2={round(temp - temp_change * 2, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 4 + 1 if solvate else cool1_ts_no_solvent // 12 * 4 + 1},istep2={cool1_ts_solvent // 12 * 5 if solvate else cool1_ts_no_solvent // 12 * 5},
+   value1={round(temp - temp_change * 2, 2)}, value2={round(temp - temp_change * 3, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 5 + 1 if solvate else cool1_ts_no_solvent // 12 * 5 + 1},istep2={cool1_ts_solvent // 12 * 6 if solvate else cool1_ts_no_solvent // 12 * 6},
+   value1={round(temp - temp_change * 3, 2)}, value2={round(temp - temp_change * 3, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 6 + 1 if solvate else cool1_ts_no_solvent // 12 * 6 + 1},istep2={cool1_ts_solvent // 12 * 7 if solvate else cool1_ts_no_solvent // 12 * 7},
+   value1={round(temp - temp_change * 3, 2)}, value2={round(temp - temp_change * 4, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 7 + 1 if solvate else cool1_ts_no_solvent // 12 * 7 + 1},istep2={cool1_ts_solvent // 12 * 8 if solvate else cool1_ts_no_solvent // 12 * 8},
+   value1={round(temp - temp_change * 4, 2)}, value2={round(temp - temp_change * 4, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 8 + 1 if solvate else cool1_ts_no_solvent // 12 * 8 + 1},istep2={cool1_ts_solvent // 12 * 9 if solvate else cool1_ts_no_solvent // 12 * 9},
+   value1={round(temp - temp_change * 4, 2)}, value2={round(temp - temp_change * 5, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 9 + 1 if solvate else cool1_ts_no_solvent // 12 * 9 + 1},istep2={cool1_ts_solvent // 12 * 10 if solvate else cool1_ts_no_solvent // 12 * 10},
+   value1={round(temp - temp_change * 5, 2)}, value2={round(temp - temp_change * 5, 2)}
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 10 + 1 if solvate else cool1_ts_no_solvent // 12 * 10 + 1},istep2={cool1_ts_solvent // 12 * 11 if solvate else cool1_ts_no_solvent // 12 * 11},
+   value1={round(temp - temp_change * 5, 2)}, value2=0.0
+ /
+ &wt type='TEMP0', istep1={cool1_ts_solvent // 12 * 11 + 1 if solvate else cool1_ts_no_solvent // 12 * 11 + 1},istep2={cool1_ts_solvent // 12 * 12 if solvate else cool1_ts_no_solvent // 12 * 12},
+   value1=0.0, value2=0.0
+ /
+ &wt type='END'
+ /
+""")
+
+def writeFinalCoolingFile(filename):
+	global temp, fitmask, rmsmask, QMMM 
+	global qmmm_atoms, qm_charge, solvate
+	global ts_solvent, ts_no_solvent
+	global cool2_ts_solvent, cool2_ts_no_solvent
+	qm_info = f"""&qmmm
+  iqmatoms={qmmm_atoms},
+  qmcharge={qm_charge},
+  qm_theory='PM3',
+  qmcut=10.0
+ /"""
+	temp_change = math.floor(temp / 6)
+	with open(f'{filename}.in','w') as f:
+		f.write(f"""Slow Cooling Input #2
+ &cntrl
+  imin = 0, irest = 1, ntx=5,
+  ntc=1, ntf=1,
+  ntpr=100, ntwx=10000,
+  ntb =  0, cut = 10.0,
+  nstlim = {cool2_ts_solvent if solvate else cool2_ts_no_solvent},
+  {"dt = 0.00001" if solvate else "dt = 0.0001"},
+  ntt = 3, gamma_ln=1000.0,
+  temp0=0.0,
+  ineb = 1,skmin = 50,skmax = 50,
+  tgtfitmask="{fitmask}",
+  tgtrmsmask="{rmsmask}",
+  vv=1,vfac=0.1,ig=-1,
+  {"ifqnt=1" if QMMM else ""}
+ /
+ {qm_info if QMMM else ""}
+""")
+
+def writeAnnealFile(filename):
+	global temp, fitmask, rmsmask, QMMM 
+	global qmmm_atoms, qm_charge, solvate
+	global ts_solvent, ts_no_solvent
+	global anneal_ts_solvent, anneal_ts_no_solvent
+	qm_info = f"""&qmmm
+  iqmatoms={qmmm_atoms},
+  qmcharge={qm_charge},
+  qm_theory='PM3',
+  qmcut=10.0
+ /"""
+	temp_mid = temp + 100
+	temp_max = temp + 200
+	with open(f'{filename}.in','w') as f:
+		f.write(f"""Anneal Input
+ &cntrl
+  imin = 0, irest = 1, ntx=5,
+  ntc=1, ntf=1,
+  ntpr=500, ntwx=10000,
+  ntb =  0, cut = 10.0,
+  nstlim = {anneal_ts_solvent if solvate else anneal_ts_no_solvent},
+  {"dt = 0.00001" if solvate else "dt = 0.0001"},
+  ntt = 3, gamma_ln=1000.0,
+  temp0={temp},
+  ineb = 1,skmin = 50,skmax = 50,
+  tgtfitmask="{fitmask}",
+  tgtrmsmask="{rmsmask}",
+  nmropt=1, ig=-1, {"ifqnt=1" if QMMM else ""}
+ /
+ {qm_info if QMMM else ""}
+ &wt type='TEMP0', istep1=0,istep2={anneal_ts_solvent // 10 * 1 if solvate else anneal_ts_no_solvent // 10 * 1},
+   value1={temp}, value2={temp_mid}
+ /
+ &wt type='TEMP0', istep1={anneal_ts_solvent // 10 + 1 if solvate else anneal_ts_no_solvent // 10 + 1},istep2={anneal_ts_solvent // 10 * 2 if solvate else anneal_ts_no_solvent // 10 * 2},
+   value1={temp_mid}, value2={temp_mid}
+ /
+ &wt type='TEMP0', istep1={anneal_ts_solvent // 10 * 2 + 1 if solvate else anneal_ts_no_solvent // 10 * 2 + 1},istep2={anneal_ts_solvent // 10 * 3 if solvate else anneal_ts_no_solvent // 10 * 3},
+   value1={temp_mid}, value2={temp_max}
+ /
+ &wt type='TEMP0', istep1={anneal_ts_solvent // 10 * 3 + 1 if solvate else anneal_ts_no_solvent // 10 * 3 + 1},istep2={anneal_ts_solvent // 10 * 4 if solvate else anneal_ts_no_solvent // 10 * 4},
+   value1={temp_max}, value2={temp_max}
+ /
+ &wt type='TEMP0', istep1={anneal_ts_solvent // 10 * 4 + 1 if solvate else anneal_ts_no_solvent // 10 * 4 + 1},istep2={anneal_ts_solvent // 10 * 5 if solvate else anneal_ts_no_solvent // 10 * 5},
+   value1={temp_max}, value2={temp}
+ /
+ &wt type='TEMP0', istep1={anneal_ts_solvent // 10 * 5 + 1 if solvate else anneal_ts_no_solvent // 10 * 5 + 1},istep2={anneal_ts_solvent // 10 * 6 if solvate else anneal_ts_no_solvent // 10 * 6},
+   value1={temp}, value2={temp}
+ /
+ &wt type='END'
+ /
+""")
+def prmtopERROR():
+	print("\nERROR: THE PRMTOP FILES ARE NOT IDENITCAL!")
+	print("PRMTOP FILES MUST BE IDENTICAL FOR NUDGE TO WORK")
+	print("PLEASE CORRECT THE INPUT FILES AND RESUBMIT.\n")
+
+def leapSetup():
+	frcmod.makeFrcmod(start, file_format)
+	frcmod.makeFrcmod(end, file_format)
+	with open('leap.in','w') as f:
+		f.write(f"""source leaprc.protein.ff14SB
+source leaprc.gaff2
+addPath /home/{user}/zTeamVPScripts/solvents/
+loadamberparams {start}.frcmod
+loadamberparams {end}.frcmod
+start=load{file_format} {start}.{file_format}
+end=load{file_format} {end}.{file_format}
+saveamberparm start start.prmtop start.inpcrd
+saveamberparm end end.prmtop end.inpcrd
+quit""")
+	# loadamberparams {frcmod_file}
+	# loadamberparams {start}.frcmod
+	# start=load{file_format} {start}_solvated.{file_format}
+	# saveamberparm start start.prmtop start.inpcrd
+
+	# call(['tleap', '-f', 'leap.in'])
+	leap.runLeap()
+	inpcrd.matchBox('start.inpcrd', 'end.inpcrd')
+	copyfile('end.prmtop', 'main.prmtop')
+	# try:
+	# 	check = call(['diff', 'start.prmtop', 'end.prmtop'])
+	# except:
+	# 	prmtopERROR()
+	# 	sys.exit()
+	# if int(check) == 0:
+	# 	print("\nPRMTOP files are identical. Continuing setup.\n")
+	# else:
+	# 	prmtopERROR()
+	# 	sys.exit()
+
+# def addles():
+# 	with open('addles.in','w') as f:
+# 		f.write("""file rprm name=(start.prmtop) read
+# file rcrd name=(complex.inpcrd) pack=2 read
+# file wprm name=(neb.prmtop) wovr
+# file wcrd name=(neb.inpcrd) wovr
+# action
+# ~ use original mass
+# omas
+# pimd
+# ~ make {} copies of atom {} {}
+# space numc={} pick #prt {} {} done
+# *EOD""".format(copies, start_atom, end_atom, copies, start_atom, end_atom))
+# 	call(['addles', 'addles.in'])
+
+def getAtomCount(start):
+	with open(start) as f:
+		f = f.readlines()
+	control = f[2].split()
+	atom_count = control[0].strip()
+	return '1', atom_count
+
+def manageCores(nodes, cores):
+	global max_cores, STRICT_PROCESSING
+	if STRICT_PROCESSING:
+		for n in range(1, STRICT_MAX):
+			if (cores % n) == 0 and (cores / n) <= max_cores:
+				return n, (cores // n)
+	else:
+		for n in range(1, max_nodes + 1):
+			if (cores % n) == 0 and (cores / n) <= max_cores:
+				return n, (cores // n)
+	EH.throwError("Run Error!", 1, f"The number of nodes required exceeds the maximum allowed nodes ({STRICT_MAX if STRICT_PROCESSING else max_nodes}).\nEither request fewer replicates or increase max_nodes.")
+
+def checkProcessors(nodes, cores, copies):
+	global max_nodes, max_cores
+	if cores > max_cores and nodes > max_nodes:
+		EH.throwError("Core and Node Error!", 2, "The number of cores and nodes has exceeded the maximum!")
+	elif cores > max_cores:
+		EH.throwError("Core Error!", 3, f"The number of cores ({cores}) has exceeded the maximum ({max_cores})!")
+	elif nodes > max_nodes:
+		EH.giveWarning("Node Warnng!", f"You are about to run this job on {nodes} nodes! Are you sure you want to do this?\nDon't be a jerk...")
+		inp = input("Continue? [ No ] >> ")
+		if inp.lower() not in ['y', 'yes', 'heck yes!']:
+			print('Exiting...\nSmart Choice.')
+			sys.exit()
+	else:
+		print("\nProcessor Information:")
+		print(f"Copies: {copies}\nNodes: {nodes}\nCores: {cores}\n")
+
+def writeBatchFile(batch_name, days, hrs, mins, test=False):
+	global copies, heat_file, equilibration_file, anneal_file
+	global cooling_file1, cooling_file2
+	nodes = 1
+	nodes, cores = manageCores(1, copies)
+	checkProcessors(nodes, cores, copies)
+	if batch_name == 'heat':
+		extra_scripts = '\ncpptraj ../main.prmtop traj.in'
+	elif batch_name == 'cool':
+		extra_scripts = 'python makeDatafile.py'
+	else:
+		extra_scripts = ''
+	if test:
+		testline = '#SBATCH --qos=test'
+		days = '00'
+		hrs  = '01'
+		mins = '00'
+	else:
+		testline = ""
+	with open(f"{batch_name}.sh", 'w') as f:
+		f.write(f"""#!/bin/bash
+
+#SBATCH -C 'avx2'
+#SBATCH --time={days}-{hrs}:{mins} # time (DD-HH:MM)
+#SBATCH --nodes={nodes} --ntasks-per-node={cores}
+#SBATCH --mem-per-cpu=150M   # memory per CPU core
+#SBATCH --mail-user=sjaker12@byu.edu   # email address
+#SBATCH --mail-type=FAIL
+#SBATCH --requeue
+{testline}
+
+# Set the max number of threads to use for programs using OpenMP. Should be <= ppn. Does nothing if the program doesn't use OpenMP.
+export OMP_NUM_THREADS=$SLURM_CPUS_ON_NODE
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+type module &>/dev/null
+[[ $? -eq 0 ]] || . /etc/profile  # source /etc/profile if `module` isn't defined
+
+module purge
+## FIXME BECAUSE PPL ARE IDIOTS
+module load gcc/7 openmpi/3.1 python/3.6 amber/18
+
+export startTime=$(runtime.py)
+echo "Started Run at `date`"
+
+echo "-------------------------------"
+echo ""
+echo "Starting Heating..."
+echo ""
+echo "-------------------------------"
+
+cd {heat_file}
+mpirun -np {copies} sander.MPI -ng {copies} -groupfile groupfile
+
+cpptraj ../main.prmtop traj.in
+
+# endTime=`date +%s`
+# runTime=`python -c "print($endTime - $startTime)"`
+# echo "Finished Heating at `date`"
+# echo "Current Runtime: $runTime seconds"
+
+runtime.py -t $stepStart -p "Step"
+runtime.py -t $startTime -p "Total"
+stepStart=`runtime.py`
+
+echo "-------------------------------"
+echo ""
+echo "Starting Equilibration..."
+echo ""
+echo "-------------------------------"
+
+stepTime=`date +%s`
+cd ../{equilibration_file}
+mpirun -np {copies} sander.MPI -ng {copies} -groupfile groupfile
+
+
+# endTime=`date +%s`
+# runTime=`python -c "print($endTime - $stepTime)"`
+# echo "Step Time: $runTime seconds"
+# runTime=`python -c "print($endTime - $startTime)"`
+# echo "Finished Equilibration at `date`"
+# echo "Current Runtime: $runTime seconds"
+
+runtime.py -t $startTime -p "Step"
+stepStart=`runtime.py`
+
+echo "-------------------------------"
+echo ""
+echo "Starting Annealing..."
+echo ""
+echo "-------------------------------"
+
+cd ../{anneal_file}
+mpirun -np {copies} sander.MPI -ng {copies} -groupfile groupfile
+
+# python makeDatafile.py
+
+# endTime=`date +%s`
+# runTime=`python -c "print($endTime - $stepTime)"`
+# echo "Step Time: $runTime seconds"
+# runTime=`python -c "print($endTime - $startTime)"`
+# echo "Finished Annealing at `date`"
+# echo "Current Runtime: $runTime seconds"
+
+runtime.py -t $stepStart -p "Step"
+runtime.py -t $startTime -p "Total"
+stepStart=`runtime.py`
+
+echo "-------------------------------"
+echo ""
+echo "Starting Slow Cooling..."
+echo ""
+echo "-------------------------------"
+
+cd ../{cooling_file1}
+mpirun -np {copies} sander.MPI -ng {copies} -groupfile groupfile
+
+# endTime=`date +%s`
+# runTime=`python -c "print($endTime - $stepTime)"`
+# echo "Step Time: $runTime seconds"
+# runTime=`python -c "print($endTime - $startTime)"`
+# echo "Finished Slow cooling at `date`"
+# echo "Current Runtime: $runTime seconds"
+
+runtime.py -t $stepStart -p "Step"
+runtime.py -t $startTime -p "Total"
+stepStart=`runtime.py`
+
+echo "-------------------------------"
+echo ""
+echo "Starting Final Cooling..."
+echo ""
+echo "-------------------------------"
+
+cd ../{cooling_file2}
+mpirun -np {copies} sander.MPI -ng {copies} -groupfile groupfile
+
+finalizeNudgeData
+
+# endTime=`date +%s`
+# runTime=`python -c "print($endTime - $stepTime)"`
+# echo "Step Time: $runTime seconds"
+# runTime=`python -c "print($endTime - $startTime)"`
+# echo "This Run Completely Finished at `date`"
+# echo "Total Runtime: $runTime seconds"
+
+echo "This Run Completely Finished at `date`"
+runtime.py -t $stepStart -p "Step"
+runtime.py -t $startTime -p "Total"
+
+echo "-------------------------------"
+""")
+
+def makeGroupFile(dir_name, copies):
+	try:
+		os.mkdir(dir_name)
+	except:
+		print(f"Could not create directory: \"{dir_name}\". It already exists")
+	os.chdir(dir_name)
+	if dir_name == 'heat':
+		with open('traj.in', 'w') as F:
+			with open('groupfile','w') as f:
+				for i in range(copies):
+					if i < (copies / 2):
+						coord_file = "../start.inpcrd"
+					else:
+						coord_file = "../end.inpcrd"
+					ext = "%03i" % i
+					f.write(f'-O -p ../main.prmtop -c {coord_file} -i ./{dir_name}.in -x ./neb.x.{ext} -o ./neb.out.{ext} -inf ./neb.info.{ext} -r ./neb.r.{ext}\n')
+					F.write(f'trajin ./neb.r.{ext}\n')
+			F.write(f"trajout ./{dir_name}.restarts.mdcrd\ngo")
+		writeHeatingFile(dir_name)
+		# writeBatchFile(dir_name, '00', '00', '05')
+
+	elif dir_name == 'equilibration':
+		with open('groupfile','w') as f:
+				for i in range(copies):
+					ext = "%03i" % i
+					f.write(f"-O -p ../main.prmtop -c ../heat/neb.r.{ext} -i ./equilibration.in -x ./neb.x.{ext} -o ./neb.out.{ext} -inf ./neb.info.{ext} -r ./neb.r.{ext}\n")
+		writeEquilibrationFile(dir_name)
+		# writeBatchFile(dir_name, '00', '00', '30')
+
+	elif dir_name == 'anneal':
+		with open('groupfile','w') as f:
+				for i in range(copies):
+					ext = "%03i" % i
+					f.write(f"-O -p ../main.prmtop -c ../equilibration/neb.r.{ext} -i ./anneal.in -x ./neb.x.{ext} -o ./neb.out.{ext} -inf ./neb.info.{ext} -r ./neb.r.{ext}\n")
+		writeAnnealFile(dir_name)
+		# makeDatafile()
+		# writeBatchFile(dir_name, '00', '05', '00')
+	elif dir_name == 'cool':
+		with open('groupfile','w') as f:
+				for i in range(copies):
+					ext = "%03i" % i
+					f.write(f"-O -p ../main.prmtop -c ../anneal/neb.r.{ext} -i ./cool.in -x ./neb.x.{ext} -o ./neb.out.{ext} -inf ./neb.info.{ext} -r ./neb.r.{ext}\n")
+		writeCoolingFile(dir_name)
+		# writeBatchFile(dir_name, '00', '05', '00')
+	elif dir_name == 'final_cool':
+		with open('groupfile','w') as f:
+				for i in range(copies):
+					ext = "%03i" % i
+					f.write(f"-O -p ../main.prmtop -c ../cool/neb.r.{ext} -i ./final_cool.in -x ./neb.x.{ext} -o ./neb.out.{ext} -inf ./neb.info.{ext} -r ./neb.r.{ext}\n")
+		writeFinalCoolingFile(dir_name)
+		# writeBatchFile(dir_name, '00', '05', '00')
+
+
+# def getTgtMaks():
+# output = [None]
+# 	with open(start) as f:
+# 		f = f.readlines()
+# 	for i in range(len(f)):
+# 		if '@<TRIPOS>ATOM' in f[i]:
+# 			while True:
+# 				if '@<TRIPOS>BOND' not in f[i]:
+# 					line = f[i].split()
+# 					atom_number = line[0].strip()
+# 					atom_type = line[5].strip()
+# 					output.append([atom_number, atom_type])
+# 					i += 1
+# 				else:
+# 					for atom in mask_atoms:
+
+# 					return rmsmask, fitmask
+# 	print(f'ERROR: Could not find @<TRIPOS>BOND section of {start}.')
+# 	print('This is most likely due to a bad file. Review the file and resubmit.')
+
+def getTemperature():
+	rxn = ''
+	indole_list = ['indole_ome','indole_cbz','inc','ino','indole_cbz_run','indole_ome_run']
+	diene_list = ['cbz','cbz_diene','cyclo','cyclo_diene','cyclopentadiene','diene_cbz','diene_cyclo','diene_cyclo_run']
+	for i in indole_list:
+		if i in start.lower() and i in end.lower():
+			rxn = 'indole'
+			temp = 193.15
+	for i in diene_list:
+		if i in start.lower() and i in end.lower():
+			rxn = 'diene'
+			temp = 277.15
+	if rxn == '':
+		print("\nCouldn't identify reaction type. Please enter the reaction temperature.")
+	else:
+		print(f'This appears to be a/an {rxn} reaction based on the input file.')
+		print(f'The default temperature for this reaction type is {temp}.')
+		print('If this is incorrect, please enter the correct temperature,\notherwise, hit enter to accept the default temperature')
+	inp = input(">> ")
+	if inp == '':
+		print(f'\nRunning with temp {temp}\n')
+		return temp
+	else:
+		try:
+			temp = float(inp)
+		except:
+			print(f'\nYour input "{inp}" is not a valid number. Try again.\n')
+			temp = getTemperature()
+	print(f'\nRunning with temp {temp}\n')
+	return temp
+
+# def readInput(input_file):
+# 	inp = []
+# 	with open(input_file) as f:
+# 		f = f.readlines()
+# 	for i in f:
+# 		i = i.replace('\n','')
+# 		i = i.split('=')
+# 		if i in 'start':
+
+def invalidEntry(flag, arg, format_type):
+	print(f'Invalid format for {flag}: {arg}')
+	print(f'Must be of type: {format_type}')
+
+def checkFile(file):
+	try:
+		with open(file) as f:
+			f = f.readlines()
+	except:
+		print(f'\nERROR: File {file} does not exist!')
+		print('Make sure your filename is correct and restart.\n')
+		sys.exit()
+
+def groupFileSetup():
+	global workdir, copies, heat_file, equilibration_file
+	global anneal_file, cooling_file1, cooling_file2, RUN_TEST
+	global days, hrs, mins
+	makeGroupFile(heat_file, copies)
+
+	os.chdir(workdir)
+	makeGroupFile(equilibration_file, copies)
+	
+	os.chdir(workdir)
+	makeGroupFile(anneal_file, copies)
+	
+	os.chdir(workdir)
+	makeGroupFile(cooling_file1, copies)
+	
+	os.chdir(workdir)
+	makeGroupFile(cooling_file2, copies)
+	
+	os.chdir(workdir)
+	if RUN_TEST:
+		writeBatchFile('run_nudge', '00', '01', '00', test=True)
+	else:
+		writeBatchFile('run_nudge', days, hrs, mins, test=False)
+
+def getQMMMAtoms():
+	print(f"The QMMM atom list is blank, however QMMM is set to on.")
+	print("Please enter a comma separated list of which atoms will be treated with QMMM (at least 2 atoms)")
+	print("If no list is provided, QMMM will beturned off")
+	inp = input(f"[ Default: Turn off QMMM ] > ")
+	print()
+	if inp == '' or "," not in inp or inp == '\n':
+		return False, False
+	return True, inp
+
+def chargeWarning(qm_charge):
+	print(f"The Value for QM Charge is set to the default value: {qm_charge}")
+	print("If this is correct, please press enter. Otherwise, enter a new charge")
+	inp = input(f"[ Default: {qm_charge} ] > ")
+	print()
+	try: 
+		inp = int(inp)
+	except:
+		return qm_charge
+	return inp
+
+def submit():
+	inp = input('Would you like to submit this job on the supercomputer? (Default: No)\n[ Yes | No | Sync ] >> ')
+	if inp.lower() in ['sync'] :
+		return 'sync'
+	elif inp.lower() in ['y', 'yes']:
+		return 'submit'
+	else:
+		return 'no'
+
+def removeExtentions(file):
+	file, extention = file.split('.')
+	return file
+
+def syncDir():
+	new_dir = workdir.replace('/home/', '/zhome/')
+	new_dir = new_dir.replace('/storage/','/compute/') # This might be unnecessary
+	end = new_dir.rfind('/')
+	sync_dir = new_dir[:end] # removes slash
+	try:
+		# Make New Directory
+		call([
+			'ssh', server_login,
+			'mkdir', '-p', new_dir
+			])
+		# Sync Directory
+		call([
+			'rsync', '-raz', '--update', '--progress',
+			workdir, f"{server_login}:{sync_dir}"
+			])
+		print('\nSync Complete\n')
+	except:
+		print('ERROR: Something went wrong when attempting to sync with your server! Aborting!')
+		sys.exit()
+	return new_dir
+
+def runJob(new_dir, run_script):
+	try:
+		call([
+			'ssh', server_login,
+			'cd', f'{new_dir};',
+			'sbatch', run_script
+			])
+	except:
+		print(f'ERROR: Something went wrong when attempting to run your job: {run_script}! Aborting!')
+		sys.exit()
+
+
+def finished(file_dir):
+	print(f'''
+Files are located in the following directory:
+ --> {file_dir}
+
+The following directories were created by this script:
+ --> {heat_file}
+ --> {equilibration_file}
+ --> {anneal_file}
+ --> {cooling_file1}
+ --> {cooling_file2}''')
+	sys.exit()
+
+#########################################################
+#                   DEFAULT VARIABLES                   #
+#########################################################
+RUN_TEST = False
+STRICT_PROCESSING = False
+STRICT_MAX = 10
+QMMM = False
+qm_charge = 0
+qmmm_atoms = None
+server_login = f"{user}@ssh.rc.byu.edu" 
+days = '00'
+hrs = '72'
+mins = '00'
+solvate = True
+solvent = ''
+ts_solvent = 0.00001
+ts_no_solvent = 0.0001
+heat_ts_solvent = 400000
+heat_ts_no_solvent = 4000000
+equilibration_ts_solvent = 1000000
+equilibration_ts_no_solvent = 10000000
+anneal_ts_solvent = 6000000 # FOR THE LOVE OF ALL THAT IS HOLY, DON'T CHANGE THESE VALUES. IF YOU DO, YOU HAVE TO REPROGRAM SO MUCH FREAKING CRAP....
+anneal_ts_no_solvent = 60000000 # FOR THE LOVE OF ALL THAT IS HOLY, DON'T CHANGE THESE VALUES. IF YOU DO, YOU HAVE TO REPROGRAM SO MUCH FREAKING CRAP....
+cool1_ts_solvent = 1200000 # FOR THE LOVE OF ALL THAT IS HOLY, DON'T CHANGE THESE VALUES. IF YOU DO, YOU HAVE TO REPROGRAM SO MUCH FREAKING CRAP....
+cool1_ts_no_solvent = 12000000 # FOR THE LOVE OF ALL THAT IS HOLY, DON'T CHANGE THESE VALUES. IF YOU DO, YOU HAVE TO REPROGRAM SO MUCH FREAKING CRAP....
+cool2_ts_solvent = 2000000
+cool2_ts_no_solvent = 20000000
+start = '' 
+end = ''
+file_format = 'mol2'
+max_cores = 24
+max_nodes = 4
+copies = 24
+temp = ''
+input_file = 'nudge.in'
+heat_file = 'heat'
+equilibration_file = 'equilibration'
+anneal_file = 'anneal'
+cooling_file1 = 'cool'
+cooling_file2 = 'final_cool'
+# indicates residue 1 (catalyst and substrate are complexed )
+fitmask = ':1'
+rmsmask = ':1'
+#########################################################
+
+
+if __name__ == '__main__':
+	ARGS, FLAGS = setup()
+	if FLAGS:
+		for i in range(len(ARGS)):
+			ARG = ARGS[i]
+			if ARG in ['--help', '-h']:
+				usage()
+				sys.exit()
+
+			elif ARG in ['--reset']:
+				removeFiles()
+				sys.exit()
+
+			elif ARG in ['--test']:
+				RUN_TEST = True
+				print("\n ***** Running Test Job ***** \n")
+			
+			elif ARG in ['-i', '--input']:
+				input_file = ARGS[i + 1]
+			
+			elif ARG in ['--efile', '-sf', '--start']:
+				start = str(ARGS[i + 1])
+				checkFile(start)
+			
+			elif ARG in ['--efile','-ef', '--end']:
+				end = str(ARGS[i + 1])
+				checkFile(end)
+			
+			elif ARG in ['--format', '-F']:
+				file_format = str(ARGS[i + 1].lower())
+			
+			elif ARG in ['--copies', '-c']:
+				try:
+					copies = int(ARGS[i + 1])
+					if copies % 2 != 0:
+						copies += 1
+				except:invalidEntry(ARG, ARGS[i + 1], 'int')
+			
+			elif ARG in ['--temp', '-T']:
+				try:
+					temp = float(ARGS[i + 1])
+				except:invalidEntry(ARG, ARGS[i + 1], 'float')
+
+			elif ARG in ['--solvent', '-s']:
+				solvate = True
+				solvent = ARGS[i + 1]
+
+			elif ARG in ['--qmmm', '-q']:
+				QMMM = True
+
+			elif ARG in ['--qmmm_atoms', '-qa']:
+				qmmm_atoms = ARGS[i + 1]
+
+			elif ARG in ['--charge', '-qc']:
+				qm_charge = ARGS[i + 1]
+
+			elif ARG in ['--no_solvent', '-N']:
+				solvate = False
+
+			elif ARG in ['-DD', '--Days']:
+				days = ARGS[i + 1]
+
+			elif ARG in ['-HH', '--Hours']:
+				hrs = ARGS[i + 1]
+
+			elif ARG in ['-MM', '--Minutes']:
+				mins = ARGS[i + 1]
+
+			elif ARG in ['-sp', '--strict']:
+				STRICT_PROCESSING = True
+
+			elif ARG in ['-mn', '--max_nodes']:
+				max_nodes = int(ARGS[i + 1])
+
+			elif ARG in ['-mc', '--max_cores']:
+				max_nodes = int(ARGS[i + 1])
+	
+	# userInput = readInput(input_file)
+	if start == '' or end == '':
+		start, end = getInputFiles(file_format)
+
+	if temp == '':
+		temp = getTemperature()
+
+	if QMMM:
+		if qm_charge == 0 and ('-qc' not in ARGS or '--charge' not in ARGS):
+			qm_charge = chargeWarning(qm_charge)
+
+		if qmmm_atoms is None:
+			QMMM, qmmm_atoms = getQMMMAtoms()
+
+	start_atom, end_atom = getAtomCount(start)
+	start = removeExtentions(start)
+	end = removeExtentions(end)
+
+	# rmsmask, fitmask = getTgtMask() # This should no longer be needed
+
+	if solvate:
+		solvent_name, off_file, frcmod_file, res_name = solvateMolecule.runTwo(start, end, file_format, solvent)
+	else:
+		# Only needed when NOT solvating :)
+		leapSetup()
+
+	# addles() # This should no longer be needed
+	
+	groupFileSetup()
+
+	print("Setup finished without any errors!")
+	
+	sub = submit()
+	if sub == 'submit':
+		new_dir = syncDir()
+		runJob(new_dir, 'run_nudge.sh')
+	elif sub == 'sync':
+		new_dir = syncDir()
+		finished(new_dir)
+	else:
+		finished(workdir)
+
+	print('Done')

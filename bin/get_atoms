@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+
+import sys
+
+def readFile(fn):
+    out = []
+    with open(fn,'r') as f:
+        f = f.readlines()
+        for l in f:
+            l = l.replace('\n','')
+            out.append(l.strip())
+    return out #Turns the file into a list
+
+def continuePrinting(file, l, counter, flag, counter_list):
+	toggle_list = ['on','yes']
+	while file[l] != 'DONE':
+		counter += 1
+		split_list = (file[l].strip()).split()
+		atom = split_list[0].strip()
+		setting = split_list[1].strip()
+		if setting.lower() in toggle_list:
+			counter_list.append(str(counter))
+		#print("{} {} {} {}".format(flag, atom, setting, counter))
+		l += 1
+	return l, counter, counter_list
+
+def parseFile(file):
+	counter_list = []
+	flag_list = ['%PEPTIDE','%SUBSTRATE']
+	counter = 0
+	for l in range(len(file)):
+		if file[l].strip() in flag_list:
+			flag = (file[l].strip())[1:]
+			l += 1
+			l, counter, counter_list = continuePrinting(file, l, counter, flag, counter_list)
+		else:
+			l += 1
+	return counter_list
+
+
+#input_file = sys.argv[1]
+input_file = 'qmmm_atoms'
+file_list = readFile(input_file)
+counter_list = parseFile(file_list)
+#print('iqmatoms={}'.format(",".join(counter_list)))
+if sys.argv[1] == '--write_file' or sys.argv[1] == '-wf':
+	with open('qmmm_list','w') as f:
+		f.write('iqmatoms={}'.format(",".join(counter_list)))
+else:
+	print('{}'.format(",".join(counter_list)))

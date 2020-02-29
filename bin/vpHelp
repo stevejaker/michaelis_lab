@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+
+import os, sys
+
+def usage():
+	print("""
+ -------------------------------------------------
+|   This is the Help manual for TeamVP Scripts    |
+ -------------------------------------------------
+Purpose:
+	Provide useful information about how
+	these scripts work, and what is needed
+	to run them.
+
+How to Use "Help":
+	"Help" is a python executable. If no 
+	argument is provided from the command
+	line, you will recieve this message.
+	A copy of this script will be sent to
+	your TeamVP bin with the name "vpHelp". 
+
+	Note: This message is also shown when
+	the flag -h or --help is listed in 
+	command line arguments.
+
+Syntax in the Installation Directory:
+	./Help <script_name1> <script_name2> ...
+
+Syntax Outside of the Installation Directory:
+	vpHelp <script_name1> <script_name2> ...
+
+Get Options:
+	./Help --options (Before Install)
+	vpHelp --options (After Install)
+""")
+	sys.exit()
+
+def options():
+	print('\nIncluded Programs:')
+	for i in os.listdir('bin'):
+		print(i)
+	for i in os.listdir('Scripts'):
+		print(i)
+
+def main(name):
+	if name == 'genconf':
+		print('''
+Information For {}:
+
+genconf is a program for obtaining conformers.
+
+This program uses openbabel to create a list of
+conformers and analyzes that list using QMMM or
+QM calclations. QMMM/QM calculations are made
+using either sqm (from AmberMD), GAMESS, or
+Gaussian (not currently functional). genconf
+requires a lot of computation time to make the 
+QMMM/QM calculations and is often better run
+on the server.
+
+Syntax:
+
+genconf [--optional flags] 
+
+Run: "genconf -h" or "genconf --help" for more
+information on optional flags and built in
+default values.
+'''.format(name))
+	elif name == 'job':
+		print('''
+Information For {}:
+
+job is a command used to check jobs. It is 
+similar to the squeue command, but you can
+actually read it.
+
+Syntax:
+
+job/JOB [--optional flags] 
+
+Run: "job -h" or "job --help" for more
+information on optional flags.
+'''.format(name))
+	elif name == 'jobinfo':
+		print('''
+Information For {}:
+
+jobinfo is a program for obtaining information
+on pending or currently running jobs.
+
+Syntax:
+
+jobinfo <jobid> [--optional flags] 
+
+Run: "jobinfo -h" or "jobinfo --help" for more
+information on optional flags.
+'''.format(name))
+	elif name == 'jobinfo_manual':
+		print('''
+Information For {}:
+
+jobinfo_manual is an outdated, user-unfriendly
+program for getting a path for running jobs using
+slurm output files and other files written by
+TeamVP scripts. It is only useful in select cases
+
+Syntax:
+
+jobinfo_manual <jobid>
+jobinfo_manual <jobid> --follow
+jobinfo_manual -s <jobid> 
+jobinfo_manual --search <jobinfo>
+jobinfo_manual -h
+jobinfo_manual --help
+
+Note: "jobinfo_manual -h" and "jobinfo_manual --help" are not particularly
+useful for anything other than getting a list of the 
+correct syntax.
+'''.format(name))
+	elif name == 'jobloop':
+		print('''
+Information For {}:
+
+jobloop is designed to get real-time job progress
+by rapidly running the "job" script at a user-defined 
+rate.
+
+Syntax: 
+
+jobloop [--optional flags] 
+
+Run: "jobloop -h" or "jobloop --help" for more
+information on optional flags and built in
+default values.
+'''.format(name))
+	elif name == 'modify':
+		print('''
+Information For {}:
+
+modify is a highly useful script for making changes
+to sander scripts. modify allows you to change time,
+memory, nodes, cores, and toggle if a job is or is
+not a test job.
+
+Syntax:
+
+modify time
+modify time <keyword>
+modify memory <mem> <mem_type>
+modify processors <nodes> <cores>
+modify nodes <nodes> <cores>
+modify cores <nodes> <cores>
+modify test on 
+modify test off 
+modify -h
+modify --help
+
+Note: "modify -h" and "modify --help" are not particularly
+useful for anything other than getting a list of the 
+correct syntax.
+'''.format(name))
+	elif name == 'transition_state':
+		print('''
+Information For {}:
+
+transition_state is an outdated program for calculating 
+tranition states through Gamess. It is not recommended
+to use this program at this time.
+
+Syntax:
+
+transition_state [--optional flags]
+
+Run: "transition_state -h" or"transition_state --help"
+for extensive information on flags. Also, run 
+"transition_state -S" or "transition_state --basis_info"
+for information on basis set options.
+'''.format(name))
+	elif name == 'umbrella_run':
+		print('''
+Information For {}:
+
+umbrella run is a program for creating Umbrella Sampling
+input files. 
+
+Syntax:
+
+umbrella_run arg1 arg2 arg3 arg4 arg5 arg6 arg7
+
+Run: "umbrella_run -h" or "umbrella_run --help" for
+information on the required arguments and the order
+they need to be in.
+'''.format(name))
+	elif name == 'transition_state':
+		print('''
+Information For {}:
+
+transition_state is an outdated program for calculating 
+tranition states through Gamess. It is not recommended
+to use this program at this time.
+
+Syntax:
+
+transition_state [--optional flags]
+
+Run: "transition_state -h" or"transition_state --help"
+for extensive information on flags. Also, run 
+"transition_state -S" or "transition_state --basis_info"
+for information on basis set options.
+'''.format(name))
+
+###################################################################
+
+		
+	elif name == 'add_charges':
+		print('''
+Information For {}:
+
+Transfers charges from one mol2 file to another one.
+
+Syntax:
+
+add_charges <Coordinate File> <Charged File>
+
+Run: '''.format(name))
+	elif name == 'add_numbers':
+		print('''
+Information For {}:
+
+This script re-names the atoms in a mol2 file
+
+Syntax:
+
+add_numbers <Input File Name>
+
+Run: '''.format(name))
+	elif name == 'compare_charges':
+		print('''
+Information For {}:
+
+Syntax:
+
+compare_charge <File #1> <File #2>
+
+Run: '''.format(name))
+	elif name == 'find_carbons_crottonaldehyde.py':
+		print('''
+Information For {}:
+
+Finds Carbon Contacts on Crottonaldehyde
+
+Syntax:
+
+python find_carbons_crottonaldehyde.py
+
+Run: '''.format(name))
+	elif name == 'find_carbons_dienes.py':
+		print('''
+Information For {}:
+
+Finds Carbon Contacts on 2 Dienes
+
+Syntax:
+
+python find_carbons_dienes.py
+
+Run: '''.format(name))
+	elif name == 'find_carbons_indole.py':
+		print('''
+Information For {}:
+
+Finds Carbon Contacts on Indoles
+
+Syntax:
+
+python find_carbons_indole.py
+
+Run: '''.format(name))
+	elif name == 'find_carbons_one_diene.py':
+		print('''
+Information For {}:
+
+Finds Carbon Contacts on 2 Dienes
+
+Syntax:
+
+python find_carbons_one_diene.py
+
+Run: '''.format(name))
+	elif name == 'getRESP':
+		print('''
+Information For {}:
+
+Gets RESP charges from the cp2k output file
+names out.log
+
+Syntax:
+
+getRESP
+
+Run: '''.format(name))
+	elif name == 'readFile.py':
+		print('''
+Information For {}:
+
+readFile is very effective module for reading
+files. It's function (also titled readFile) 
+requests 2 arguments: filename and return_type
+
+Syntax:
+
+from readFile import readFile
+readFile(filename, return_type)
+
+Return_Types: 
+	"1" / "list"  		 (DEFAULT)
+	"2" / "array" / "list of list"
+
+Run: '''.format(name))
+	elif name == '':
+		print('''
+Information For {}:
+
+
+
+Syntax:
+
+Run: '''.format(name))
+	else:
+		print("Can't identify selection: {}".format(name))
+
+if __name__ == '__main__':
+	if len(sys.argv) < 2:
+		usage()
+	elif "--options" in sys.argv:
+		options()
+	elif "--help" in sys.argv or '-h' in sys.argv:
+		usage()
+	else:
+		for i in sys.argv[1:]:
+			main(i.lower())

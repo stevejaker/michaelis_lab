@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+
+import os, sys
+from shutil import copy, copytree, rmtree
+from getpass import getuser
+from subprocess import call, check_output
+import error_handler as EH
+from FileReader import ReadFile
+import runAntechamber
+
+WORKDIR = os.getcwd()   # Pulls Current Work Directory
+USER = getuser()     # Pulls Username
+ARGS = sys.argv[1:]  # Takes input arg vector and removes the program name
+CHARGE_DCT = {
+	"resp": "RESP Charges -- Uses Gaussian",
+	"cm1" : "CM1 Charges",
+	"esp" : "ESP (Kollman) Charges",
+	"gas" : "Gasteiger Charges -- Openbabel and Avogadro do this by default...",
+	"wc"  : "Write out the charges -- not sure how this works",
+	"bcc" : "AM1-BCC Charges (Default)",
+	"cm2" : "CM2 Charges",
+	"mul" : "Mulliken Charges -- Low level charge",
+	"rc"  : "Read in the charges -- not sure how this works",
+	"dc"  : "Delete Charges -- Why would you do this?"
+}
+CHARGE_METHODS = ["resp", "cm1", "esp", "gas", "wc", "bcc", "cm2", "mul", "rc", "dc"]
+charge_type = 'bcc'
+file_type = 'mol2'
+
+
+
+def usage():
+	print("""
+Usage:
+	runac [options]
+
+Options:
+	-h,  --help 			Shows this message
+	-t,  --type 			Declares File Type (Default mol2)
+""")
+
+def removeIntermediateFiles():
+	try: os.remove("sqm.in")
+	except: pass
+	try: os.remove("sqm.out")
+	except: pass
+	try: os.remove("sqm.pdb")
+	except: pass
+
+
+def getFiles(file_type):
+	file_list = []
+	for i in os.listdir(WORKDIR):
+		if i.endswith(f'.{file_type}'):
+			file_list.append(i)
+	if file_list == []:
+		EH.throwError(1, "File Not Found Error!", f"No .{file_type} files found in this directory!")
+	return file_list
+
+def getNetCharge(infile):
+	net_charge = 0.0
+	mol = ReadFile(infile)
+	for i in mol.AtomDetails:
+		net_charge += float(mol.AtomDetails[i]['atom_charge'])
+	return str(round(net_charge, 0))
+
+
+def main():
+	# Insert Code Here
+	file_list = getFiles(file_type)
+	for infile in file_list:
+		net_charge = getNetCharge(infile)
+		print(f"Net charge: {net_charge}")
+		outfile = infile.replace(f".{file_type}", f"-OUT.{file_type}")
+		runAntechamber.runAC(infile, outfile, file_type, net_charge, charge_type)
+		removeIntermediateFiles()
+
+
+if __name__ == '__main__':
+	for i in range(len(ARGS)):
+		ARG = ARGS[i]
+		if ARG in ['-h', '--help']:
+			usage()
+			sys.exit()
+		
+		elif ARG in ['-cd', '--details']:
+			charge = ARGS[i + 1].lower()
+			try:
+				print(CHARGE_DCT[charge])
+			except:
+				EH.throwError("Invalid Charge Type!", 1, f"Couldn't identify charge type: {charge}")
+
+		elif ARG in ['-t', '--type']:
+			file_type = ARGS[i + 1]
+
+		elif ARG in ['-t', '--type']:
+			if ARGS[i + 1] not in CHARGE_METHODS:
+				EH.throwError("Invalid Charge Type!", 1, f"Couldn't identify charge type: {ARGS[i + 1]}")
+			else:
+				charge_type = ARGS[i + 1]
+
+	main()
+
