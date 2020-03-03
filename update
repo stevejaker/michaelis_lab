@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+
+from subprocess import call
+import sys
+
+if __name__ == '__main__':
+	call(['./uninstall','--confirm'])
+	call(['./install'])
+	
+
+	if '--sync' in sys.argv:
+		call(['vpSync'])
+		print('\nUpdate and Sync Successfull\n')
+	else:
+		print('Update Successfull\n')

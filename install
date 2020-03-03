@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+
+import os, sys
+from subprocess import call
+from shutil import copytree, copy
+from getpass import getuser
+
+
+workdir = os.getcwd()
+user = getuser()
+
+server_only = ['job','jobloop','jobinfo','jobinfo_manual']
+
+def main(source_dir, end_dir):
+	global server_only
+	try:
+		copytree(source_dir, end_dir)
+		print('\nMoved the following files to {}\n'.format(end_dir))
+	except FileExistsError:
+		print('\n{} Already Exists.'.format(end_dir))
+		print('Writing files into that Directory\n')
+	for i in os.listdir(end_dir):
+		if i in server_only:
+			message = '(Server Use Only)'
+		else:
+			message = ''
+		print(' --> {:<20} {}'.format(i, message))
+		call(['chmod','+x','{}{}'.format(end_dir, i)])
+	try:
+		with open('{}/.bashrc'.format(homedir),'r') as F:
+			F = F.read()
+		if 'export PATH=$PATH:{}\n'.format(end_dir) not in F and 'export PYTHONPATH=$PYTHONPATH:{}\n'.format(end_dir) not in F:
+			with open('{}/.bashrc'.format(homedir),'a+') as f:	
+				f.write('export PATH=$PATH:{}\n'.format(end_dir))
+				f.write('export PYTHONPATH=$PYTHONPATH:{}\n'.format(end_dir))
+			print("\nAdded {} to your path.\n".format(end_dir))
+		else:
+			print("\n{} Is already in your path.\n".format(end_dir))
+	except:
+		print("\nERROR: Couldn't locate your .bashrc file. Add the following lines to your .bashrc file.")
+		print('export PATH=$PATH:{}\n'.format(end_dir))
+		print('export PYTHONPATH=$PYTHONPATH:{}\n'.format(end_dir))
+
+def compile(): #FIXME
+	# call(["./compile"])
+	pass
+
+def loadRCFunctions():
+	global source_dir
+	with open('{}/.bashrc'.format(homedir),'r') as f:
+		current_bash_rc = f.readlines()
+	with open('{}/.bashrc'.format(homedir),'a+') as f:
+		f.write("\n")
+		for i in os.listdir(source_dir.format('rc_functions')):
+			if f"source ~/zTeamVPScripts/rc_functions/{i}" not in current_bash_rc:
+				f.write(f"source ~/zTeamVPScripts/rc_functions/{i}\n")
+
+if __name__ == '__main__':
+	dir_list = ['misc', 'bin', 'Scripts', 'solvents', 'frcmod_files', 'rc_functions']
+	homedir = '/home/{}'.format(user)
+	source_dir = workdir + "/{}/"
+	final = '/home/{}/zTeamVPScripts/'.format(user) + "{}/"
+	# source_bin = '{}/bin/'.format(workdir)
+	# source_scripts = '{}/Scripts/'.format(workdir)
+	# source_solvent = '{}/solvents/'.format(workdir)
+	# source_frcmod = '{}/frcmod_files/'.format(workdir)
+	# final_bin = '/home/{}/zTeamVPScripts/bin/'.format(user)
+	# final_scripts = '/home/{}/zTeamVPScripts/Scripts/'.format(user)
+	# final_solvent = '/home/{}/zTeamVPScripts/solvents/'.format(user)
+	# final_frcmod = '/home/{}/zTeamVPScripts/frcmod_files/'.format(user)
+	# final_contents = f"/home/{user}/zTeamVPScripts/Contents"
+
+	if ('/zhome/' in workdir or '/panfs/pan.fsl.byu.edu/' in workdir) and '/home/' not in workdir:
+		homedir = homedir.replace('/home/','/zhome/')
+		final = final.replace('/home/','/zhome/')
+		# source_dir = source_dir.replace('/fslhome/','/zhome/')
+
+		# Old Crap that is most likely not useful
+		# final_bin = final_bin.replace('/home/','/zhome/')
+		# final_scripts = final_scripts.replace('/home/','/zhome/')
+		# final_solvent = final_solvent.replace('/home/','/zhome/')
+		# final_frcmod = final_frcmod.replace('/home/','/zhome/')
+		# final_contents = final_contents.replace('/home/','/zhome/')
+
+	elif '/fslhome/' in workdir:
+		homedir = homedir.replace('/home/','/zhome/')
+		final = final.replace('/home/','/zhome/')
+		# source_dir = source_dir.replace('/fslhome/','/zhome/')
+
+		# Old Crap that is most likely not useful
+		# final_bin = final_bin.replace('/fslhome/','/zhome/')
+		# final_scripts = final_scripts.replace('/fslhome/','/zhome/')
+		# final_solvent = final_solvent.replace('/fslhome/','/zhome/')
+		# final_frcmod = final_frcmod.replace('/fslhome/','/zhome/')
+		# final_contents = final_contents.replace('/fslhome/','/zhome/')
+
+	elif '/Users/' in workdir:
+		homedir = homedir.replace('/home/','/Users/')
+		final = final.replace('/home/','/Users/')
+		
+	# copy("{}/Help".format(workdir),"{}/bin/vpHelp".format(workdir))
+	# copy("{}/sync".format(workdir),"{}/bin/vpSync".format(workdir))
+	# compile()
+	for source in dir_list:
+		main(source_dir.format(source), final.format(source))
+
+	# main(source_bin, final_bin)
+	# main(source_scripts, final_scripts)
+	# main(source_solvent, final_solvent)
+	# main(source_frcmod, final_frcmod)
+
+	# FIXME
+	# copy("{}/Contents".format(workdir),final_contents)
+
+	loadRCFunctions()

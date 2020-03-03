@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+
+import os, sys
+from subprocess import call
+from shutil import rmtree
+from getpass import getuser
+
+
+workdir = os.getcwd()
+user    = getuser()
+
+def confirm():
+	inp = input("\nAre you sure you want to uninstall everything from TeamVpScripts?\n[ No ] >> ")
+	if inp.lower() in ['yes','y']:
+		return True
+	else:
+		print('\nUninstallation Aborted!\n')
+		return False
+
+def main():
+	try:
+		rmtree(vp_dir)
+	except FileNotFoundError:
+		print('\nTeamVPScripts Files Not Found! Uninstallation Aborted!\n')
+		sys.exit()
+	with open("{}/.bashrc".format(homedir)) as F:
+		F = F.readlines()
+	with open("{}/.bashrc".format(homedir), 'w') as f:
+		for i in F:
+			if 'zTeamVPScripts' in i:
+				pass
+			elif "_functions" in i and "source" in i:
+				pass
+			else:
+				f.write(i)
+	print('\nUninstall Complete.\n')
+
+
+if __name__ == '__main__':
+	homedir = '/home/{}'.format(user)
+	vp_dir = '/home/{}/zTeamVPScripts/'.format(user)
+	if ('/zhome/' in workdir or '/panfs/pan.fsl.byu.edu/' in workdir) or '/home/' not in workdir:
+		vp_dir = vp_dir.replace('/home/','/zhome/')
+		homedir = homedir.replace('/home/','/zhome/')
+	if '--confirm' in sys.argv or confirm():
+		main()
